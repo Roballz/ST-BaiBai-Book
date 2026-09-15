@@ -1,14 +1,15 @@
 import { apiSettings } from '@/api/settings';
 import { getContext, setMessageText, type STMessage } from '@/st/context';
 import { fmtItemLogInline } from './prompts';
-import { mergeLifeDetailsOp, normalizeLifeDetailText } from './lifeDetails';
+import { lifeDetailSubject, mergeLifeDetailsOp, sameLifeDetail } from './lifeDetails';
 import { mergeProtagonistDelta } from './protagonist';
+import { applyNpcAffinity, cleanNpcAffinityLevel } from './npcRelations';
 import { memory, recomputeDerived, saveMemory, scheduleLeafFlush } from './store';
 import { readItemsTagText, writeItemLogTag, writeVarLogTag } from './timeTag';
 import { scheduleVectorIndex } from './vector';
 import { invalidateRecallCache } from './vector/cache';
 import { createEmptyMemory } from './types';
-import type { BaibaiMemory, ItemDelta, ItemLogEntry, JsonValue, LeafExtra, LifeDetailAdd, LifeDetailUpdate, MemLifeDetail, MemNpc, MemPlan, MemScene, MemSummary, NpcDelta, PlanResolveItem, ProtagonistDelta, SceneDelta, SceneFocus, SceneOp, SceneReparent, StoredDelta, SummaryDelta, VarOp, VarTemplate, VarTier } from './types';
+import type { BaibaiMemory, ItemDelta, ItemLogEntry, JsonValue, LeafExtra, LifeDetailAdd, LifeDetailUpdate, MemLifeDetail, MemNpc, MemPlan, MemScene, MemSummary, NpcAffinity, NpcDelta, PlanResolveItem, ProtagonistDelta, SceneDelta, SceneFocus, SceneOp, SceneReparent, StoredDelta, SummaryDelta, VarOp, VarTemplate, VarTier } from './types';
 
 let idSeq = 0;
 /** 生成稳定唯一 id(不依赖 random;时间走 nowMs 便于测试注入) */
@@ -177,6 +178,9 @@ function cleanNpcDelta(raw: unknown): NpcDelta | null {
     age: optText(raw.age),
     ageTime: optText(raw.ageTime),
     relation: optText(raw.relation),
+    affinityInner: cleanNpcAffinityLevel(raw.affinityInner),
+    affinityOuter: cleanNpcAffinityLevel(raw.affinityOuter),
+    affinityNote: patchText(raw.affinityNote),
     ties: optText(raw.ties),
     title: optText(raw.title),
     desc: optText(raw.desc),
@@ -224,6 +228,8 @@ function cleanLifeDetailAdd(raw: unknown): LifeDetailAdd | null {
   const text = optText(raw.text);
   if (!text) return null;
   const out: LifeDetailAdd = { text };
+  const subject = typeof raw.subject === 'string' ? raw.subject.trim() : '';
+  if (subject) out.subject = subject;
   const topics = cleanTextList(raw.topics).slice(0, 3);
   if (topics.length) out.topics = topics;
   const anchors = cleanTextList(raw.anchors).slice(0, 5);
@@ -242,6 +248,8 @@ function cleanLifeDetailUpdate(raw: unknown): (LifeDetailUpdate & { tier?: 'pinn
   const id = optText(raw.id);
   if (!id) return null;
   const out: LifeDetailUpdate & { tier?: 'pinned' | 'active' | 'archive' } = { id };
+  const subject = typeof raw.subject === 'string' ? raw.subject.trim() : '';
+  if (subject) out.subject = subject;
   const text = optText(raw.text);
   if (text) out.text = text;
   if (raw.topics !== undefined) out.topics = cleanTextList(raw.topics).slice(0, 3);
@@ -1254,6 +1262,7 @@ function applyStoredDeltaTo(mem: BaibaiMemory, d: StoredDelta, leaf: { id: strin
         if (add.title && !ex.title) ex.title = add.title.trim();
         if (add.desc && !ex.desc) ex.desc = add.desc.trim();
         if (add.personality && !ex.personality) ex.personality = add.personality.trim();
+        applyNpcAffinity(ex, add, true);
         applyNpcState(ex, add);
         applyNpcPlacement(ex, add);
         ex.updatedAt = t;
@@ -1270,6 +1279,7 @@ function applyStoredDeltaTo(mem: BaibaiMemory, d: StoredDelta, leaf: { id: strin
           createdAt: t,
           updatedAt: t,
         };
+        applyNpcAffinity(npc, add);
         applyAge(npc, add, npcTime);
         applyNpcState(npc, add);
         applyNpcPlacement(npc, add);
@@ -1302,6 +1312,7 @@ function applyStoredDeltaTo(mem: BaibaiMemory, d: StoredDelta, leaf: { id: strin
       if (upd.title) n.title = upd.title.trim();
       if (upd.desc) n.desc = upd.desc.trim();
       if (upd.personality) n.personality = upd.personality.trim();
+      applyNpcAffinity(n, upd); // 两侧独立覆盖,不做累加或自动联动
       applyNpcState(n, upd); // 即时层(着装/状态/重要性)覆盖刷新
       applyNpcPlacement(n, upd); // 随行/所在地变更(NPC 移动)
       n.updatedAt = t;
@@ -1362,8 +1373,8 @@ function applyStoredDeltaTo(mem: BaibaiMemory, d: StoredDelta, leaf: { id: strin
     (d.lifeDetails.add ?? []).forEach((add, i) => {
       const text = add.text?.trim();
       if (!text) return;
-      // 同规范化文本已存在 → 不产生重复行;但把新带的 topics/anchors/until 合并进既有条(补充信息不丢)
-      const dup = mem.lifeDetails.find(x => normalizeLifeDetailText(x.text) === normalizeLifeDetailText(text));
+      // 同人物的同规范化文本已存在 → 不产生重复行;但把新带的 topics/anchors/until 合并进既有条(补充信息不丢)
+      const dup = mem.lifeDetails.find(x => sameLifeDetail(x, add));
       if (dup) {
         if (add.topics?.length) dup.topics = add.topics.slice(0, 3);
         if (add.anchors?.length) dup.anchors = add.anchors.slice(0, 5);
@@ -1372,6 +1383,7 @@ function applyStoredDeltaTo(mem: BaibaiMemory, d: StoredDelta, leaf: { id: strin
       }
       mem.lifeDetails.push({
         id: detailId(leaf.id, i),
+        subject: lifeDetailSubject(add),
         text,
         topics: (add.topics ?? []).slice(0, 3),
         anchors: (add.anchors ?? []).slice(0, 5),
@@ -1384,6 +1396,7 @@ function applyStoredDeltaTo(mem: BaibaiMemory, d: StoredDelta, leaf: { id: strin
     for (const upd of d.lifeDetails.update ?? []) {
       const det = mem.lifeDetails.find(x => x.id === upd.id);
       if (!det) continue;
+      if (upd.subject?.trim()) det.subject = upd.subject.trim();
       if (upd.text?.trim()) det.text = upd.text.trim();
       if (upd.topics) det.topics = upd.topics.slice(0, 3);
       if (upd.anchors) det.anchors = upd.anchors.slice(0, 5);
@@ -1909,7 +1922,7 @@ export function editItem(
 
 /** 手动新增一个 NPC。无有效叶子返回 false。 */
 export function upsertNpc(
-  fields: {
+  fields: NpcAffinity & {
     name: string;
     gender?: string;
     age?: string;
@@ -1934,6 +1947,9 @@ export function upsertNpc(
         gender: fields.gender?.trim() || undefined,
         age: fields.age?.trim() || undefined,
         relation: fields.relation?.trim() || undefined,
+        affinityInner: cleanNpcAffinityLevel(fields.affinityInner),
+        affinityOuter: cleanNpcAffinityLevel(fields.affinityOuter),
+        affinityNote: fields.affinityNote?.trim(),
         ties: fields.ties?.trim() || undefined,
         title: fields.title?.trim() || undefined,
         desc: fields.desc?.trim() || undefined,
@@ -1957,7 +1973,7 @@ export function upsertNpc(
  */
 export function editNpc(
   oldName: string,
-  patch: {
+  patch: NpcAffinity & {
     name?: string;
     gender?: string;
     age?: string;
@@ -1994,10 +2010,18 @@ export function editNpc(
   const age = patch.age !== undefined ? (patch.age.trim() || undefined) : prev?.age;
   const ageTime = age && age === prev?.age ? prev?.ageTime : undefined;
 
-  const fields = { gender, age, ageTime, relation, ties, title, desc, personality, outfit, condition, important, follow, location };
+  // 改名也保留两侧和说明;未传不动,显式 null/空串可恢复未知/清空说明。
+  const affinity: NpcAffinity = {};
+  if (prev && norm(newName) !== norm(oldName)) applyNpcAffinity(affinity, prev);
+  applyNpcAffinity(affinity, patch);
+  const fields = { gender, age, ageTime, relation, ties, title, desc, personality, outfit, condition, important, follow, location, ...affinity };
   if (norm(newName) !== norm(oldName)) {
     return appendOpToLatestLeaf({
       npcs: { remove: [oldName], add: [{ name: newName, ...fields }] },
+      // 改名同步归属,不改正文或稳定 id;删除角色本身则保留其历史生活档案。
+      lifeDetails: { update: memory.lifeDetails
+        .filter(d => lifeDetailSubject(d) !== 'user' && norm(lifeDetailSubject(d)) === norm(oldName))
+        .map(d => ({ id: d.id, subject: newName })) },
     });
   }
   return appendOpToLatestLeaf({ npcs: { update: [{ name: newName, ...fields }] } });

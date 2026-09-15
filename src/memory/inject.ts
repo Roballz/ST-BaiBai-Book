@@ -15,7 +15,8 @@ import type { STMessage } from '@/st/context';
 import { getContext } from '@/st/context';
 import { buildSceneLocationIndex, classifyNpcPresence, findCurrentSceneId, getLeaf, itemReachableAtScene, leafValid } from './apply';
 import { fmtItems, fmtPlans, fmtResolvedPlans, renderVarsState, selectRecentResolvedPlans, MEMORY_BRIEFING_NOTE, MEMORY_BRIEFING_END } from './prompts';
-import { fmtNpcTiesContext } from './npcRelations';
+import { fmtLifeDetail } from './lifeDetails';
+import { fmtNpcAffinity, fmtNpcTiesContext, NPC_AFFINITY_BRIEFING } from './npcRelations';
 import { memory } from './store';
 import { compactTimeLabel, formatRange, latestStoryTime, splitTimeLabel, timeTagPrompt } from './timeTag';
 import { relativeTimeLabel, weekdayLabel, ageDisplay, calculateRelativeDays } from './timeRel';
@@ -396,7 +397,7 @@ function relationHead(relation: string | undefined): string {
  *  - 在场(随行 / 所在地=主角当前节点)→ 全量:名 + 性别 + 年龄 + 身份 + 关系 + 性格 + 外貌 + 即时状态。
  *  - **同区域**(抬头最多一级就与主角共处)→ 轻量:名 + 性别 + 年龄 + 身份 + 关系 + 性格 + 所在地。留个性格,免得 AI
  *    临时拉其出场时凭空 OOC;但砍掉外貌/即时状态这俩大头,人多时省得多。
- *  - 不在场(更上级祖先/更远旁支)→ 只发 名 + 性别 + 关系称谓 + 身份(title)。
+ *  - 不在场(更上级祖先/更远旁支)→ 只发 名 + 性别 + 关系称谓 + 身份(title) + 已有好感档位(省略说明)。
  * **性别在所有档都发**(包括不在场),防 AI 搞错性别;关系的**称谓头**同理(把亲哥写成陌生人同级严重)。
  * 年龄按锚点+当前故事时间(now)推算后注入,时间跳跃自动长岁。无 NPC 返回空串。
  */
@@ -416,6 +417,7 @@ function fmtNpcContext(npcs: MemNpc[], scenes: MemScene[], here: string, locatio
   const age = (n: MemNpc): string => oneLine(ageDisplay(n.age, n.ageTime, now));
 
   const lines: string[] = [];
+  if (npcs.some(n => fmtNpcAffinity(n))) lines.push(NPC_AFFINITY_BRIEFING);
   const ties = fmtNpcTiesContext(npcs);
   if (ties) lines.push(ties);
   if (main.length) {
@@ -425,7 +427,8 @@ function fmtNpcContext(npcs: MemNpc[], scenes: MemScene[], here: string, locatio
         const inBracket = [oneLine(n.gender), age(n), oneLine(n.title)].filter(Boolean);
         const head = inBracket.length ? `${n.name}(${inBracket.join('·')})` : n.name;
         const rel = oneLine(n.relation) ? ` —— 与主角:${oneLine(n.relation)}` : '';
-        return `  - ${head}${rel}${npcStateTail(n, true)}`;
+        const affinity = fmtNpcAffinity(n);
+        return `  - ${head}${rel}${affinity ? ` 〔好感估计:${affinity}〕` : ''}${npcStateTail(n, true)}`;
       })
       .join('\n');
     lines.push(`主要角色(核心主演,需始终保持其当前状态连贯):\n${detailed}`);
@@ -438,6 +441,8 @@ function fmtNpcContext(npcs: MemNpc[], scenes: MemScene[], here: string, locatio
         if (inBracket.length) parts.push(`(${inBracket.join('·')})`);
         const profile: string[] = [];
         if (oneLine(n.relation)) profile.push(`与主角:${oneLine(n.relation)}`);
+        const affinity = fmtNpcAffinity(n);
+        if (affinity) profile.push(`好感估计:${affinity}`);
         if (oneLine(n.personality)) profile.push(`性格:${oneLine(n.personality)}`);
         if (oneLine(n.desc)) profile.push(oneLine(n.desc));
         const profileStr = profile.length ? ` —— ${profile.join(';')}` : '';
@@ -455,6 +460,8 @@ function fmtNpcContext(npcs: MemNpc[], scenes: MemScene[], here: string, locatio
         const bracket = inBracket.length ? `(${inBracket.join('·')})` : '';
         const profile: string[] = [];
         if (oneLine(n.relation)) profile.push(`与主角:${oneLine(n.relation)}`);
+        const affinity = fmtNpcAffinity(n);
+        if (affinity) profile.push(`好感估计:${affinity}`);
         if (oneLine(n.personality)) profile.push(`性格:${oneLine(n.personality)}`);
         const pers = profile.length ? ` —— ${profile.join(';')}` : '';
         const place = oneLine(n.location) ? ` [在:${oneLine(n.location)}]` : '';
@@ -464,16 +471,17 @@ function fmtNpcContext(npcs: MemNpc[], scenes: MemScene[], here: string, locatio
     lines.push(`同区域角色(在附近但未必照面;需要时可让其自然登场,勿凭空改设定):\n${brief}`);
   }
   if (absent.length) {
-    // 不在场:仅名 + 性别 + 关系称谓 + 身份,按所在地括注;无外貌/性格/状态
+    // 不在场:仅名 + 性别 + 关系称谓 + 身份 + 好感档位,按所在地括注;无外貌/性格/状态
     const brief = absent
       .map(n => {
         const inBracket = [oneLine(n.gender), relationHead(n.relation), oneLine(n.title)].filter(Boolean);
         const bracket = inBracket.length ? `(${inBracket.join('·')})` : '';
         const loc = oneLine(n.location);
-        return `  - ${n.name}${bracket}${loc ? ` [在:${loc}]` : ''}`;
+        const affinity = fmtNpcAffinity(n, false, false);
+        return `  - ${n.name}${bracket}${loc ? ` [在:${loc}]` : ''}${affinity ? ` 〔好感估计:${affinity}〕` : ''}`;
       })
       .join('\n');
-    lines.push(`其他已知角色(不在当前场景,仅名与身份):\n${brief}`);
+    lines.push(`其他已知角色(不在当前场景,简要名册):\n${brief}`);
   }
   return lines.join('\n');
 }
@@ -569,8 +577,8 @@ export function buildStateInjectionText(): string {
   if (inj.lifeDetails && memory.lifeDetails.length) {
     const picked = selectLifeDetailsForInjection(memory.lifeDetails, recentContextText(), memory.state.time, calculateRelativeDays);
     if (picked.length) {
-      const lines = picked.map(d => `- ${oneLine(d.text)}`);
-      st.push(`[主角生活细节]\n${lines.join('\n')}\n(以上仅在与当前对话自然相关时参考;不要逐条复述、不要刻意提及,用不上就忽略)`);
+      const lines = picked.map(d => `- ${oneLine(fmtLifeDetail(d, getContext()?.name1?.trim() || '主角'))}`);
+      st.push(`[生活小档案·按人物]\n${lines.join('\n')}\n(每条仅属于姓名标明的人,不可混用给主角或其他角色;仅在与当前对话自然相关时参考,不要逐条复述或刻意提及,用不上就忽略。档案存在不代表其他角色已知这些细节,仍遵守剧情视角)`);
     }
   }
 
