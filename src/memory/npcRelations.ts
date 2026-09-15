@@ -1,4 +1,4 @@
-import type { MemNpc, NpcAffinity, NpcAffinityLevel } from './types';
+import type { MemNpc, NpcAffinity, NpcAffinityLevel, NpcPresence } from './types';
 
 function oneLine(value: string | undefined): string {
   return (value ?? '').replace(/\s*[\r\n]+\s*/g, ' ').trim();
@@ -55,6 +55,8 @@ export interface NpcSummaryView extends NpcAffinity {
   condition?: string;
   follow?: boolean;
   location?: string;
+  /** 摘要名册在场标记:由 engine 用 classifyNpcPresence 按「本楼之前」的状态算好;缺省不显示标记 */
+  presence?: NpcPresence;
 }
 
 /** 给摘要模型的已登场 NPC 名册。长期关系必须随既有状态一起给模型，才能做整体覆盖更新。 */
@@ -67,7 +69,13 @@ export function fmtNpcSummaryList(npcs: NpcSummaryView[]): string {
       if (oneLine(n.gender)) inBracket.push(oneLine(n.gender));
       if (oneLine(n.age)) inBracket.push(`${oneLine(n.age)}${n.ageTime ? `·记于${oneLine(n.ageTime)}` : ''}`);
       const bracket = inBracket.length ? `(${inBracket.join('·')})` : '';
-      const place = n.follow ? ' [随行]' : oneLine(n.location) ? ` [在:${oneLine(n.location)}]` : '';
+      // 在场标记:只给摘要名册用(presence 由 engine 计算),要 AI 拿它做离场/归场对账而非自行推理。
+      const mark = n.presence === 'present' ? '〔在场〕'
+        : n.presence === 'nearby' ? '〔同区域〕'
+          : n.presence === 'absent' ? '〔不在场〕' : '';
+      const place = n.follow ? ' [随行]'
+        : oneLine(n.location) ? ` [在:${oneLine(n.location)}]`
+          : n.presence ? ' [所在不明]' : '';
       const tail: string[] = [];
       if (oneLine(n.title)) tail.push(oneLine(n.title));
       if (oneLine(n.relation)) tail.push(`与主角:${oneLine(n.relation)}`);
@@ -80,7 +88,7 @@ export function fmtNpcSummaryList(npcs: NpcSummaryView[]): string {
       if (oneLine(n.outfit)) state.push(`着装:${oneLine(n.outfit)}`);
       if (oneLine(n.condition)) state.push(`状态:${oneLine(n.condition)}`);
       const stateStr = state.length ? ` 〔${state.join(';')}〕` : '';
-      return `  - ${star}${oneLine(n.name)}${bracket}${place}${title}${stateStr}`;
+      return `  - ${star}${oneLine(n.name)}${bracket}${mark}${place}${title}${stateStr}`;
     })
     .join('\n');
 }
@@ -139,4 +147,4 @@ export function fmtNpcAffinity(npc: NpcAffinity, partial = false, includeNote = 
 }
 
 /** 只在确有好感记录时注入;估计不能变成读心、剧情事实或强制行为指令。 */
-export const NPC_AFFINITY_BRIEFING = '内心好感与外在态度是对主角的五档定性估计,不是精确分数或既定事实。内在是真实倾向估计,外在是相对稳定的对待方式,二者独立且通常保持;一次语气/情绪变化不等于关系跨档。未知不等于中性。以明确剧情与人设为准,好感不等于爱情、信任、服从或同意;内在估计不代表主角或其他角色知情,不得读心、揭穿伪装或复述档位,按视角自然表现即可。';
+export const NPC_AFFINITY_BRIEFING = '内心好感与外在态度是对主角的五档定性估计,不是精确分数或既定事实。内在是真实倾向估计,外在是相对稳定的对待方式,二者独立且通常保持;一次语气/情绪变化不等于关系跨档。未知不等于中性。以明确剧情与人设为准,好感不等于爱情、信任、服从或同意;内在估计不代表主角或其他角色知情,不得读心、揭穿伪装或复述档位,按视角自然表现即可。估计是既有剧情的总结,不是对本轮的上限或禁令,关系仍可随剧情继续发展或转折。';

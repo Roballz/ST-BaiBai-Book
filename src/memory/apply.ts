@@ -9,7 +9,10 @@ import { readItemsTagText, writeItemLogTag, writeVarLogTag } from './timeTag';
 import { scheduleVectorIndex } from './vector';
 import { invalidateRecallCache } from './vector/cache';
 import { createEmptyMemory } from './types';
-import type { BaibaiMemory, ItemDelta, ItemLogEntry, JsonValue, LeafExtra, LifeDetailAdd, LifeDetailUpdate, MemLifeDetail, MemNpc, MemPlan, MemScene, MemSummary, NpcAffinity, NpcDelta, PlanResolveItem, ProtagonistDelta, SceneDelta, SceneFocus, SceneOp, SceneReparent, StoredDelta, SummaryDelta, VarOp, VarTemplate, VarTier } from './types';
+import type { BaibaiMemory, ItemDelta, ItemLogEntry, JsonValue, LeafExtra, LifeDetailAdd, LifeDetailUpdate, MemLifeDetail, MemNpc, MemPlan, MemScene, MemSummary, NpcAffinity, NpcDelta, NpcPresence, PlanResolveItem, ProtagonistDelta, SceneDelta, SceneFocus, SceneOp, SceneReparent, StoredDelta, SummaryDelta, VarOp, VarTemplate, VarTier } from './types';
+
+// 供既有调用方继续从 apply 取在场类型;定义在 types.ts 与名册展示共用。
+export type { NpcPresence } from './types';
 
 let idSeq = 0;
 /** 生成稳定唯一 id(不依赖 random;时间走 nowMs 便于测试注入) */
@@ -191,7 +194,9 @@ function cleanNpcDelta(raw: unknown): NpcDelta | null {
     condition: patchText(raw.condition),
     important: optBool(raw.important),
     follow: optBool(raw.follow),
-    location: optText(raw.location),
+    // 同 outfit/condition 的补丁语义:省略=保持旧值,空字符串=明确清空(离场且去向未明 → 所在不明)。
+    // 此前用 optText 会把空串洗成 undefined,导致 AI 无法清掉旧地点、离场后仍被判为在场。
+    location: patchText(raw.location),
   };
 }
 
@@ -589,8 +594,6 @@ export function sceneRelation(pPath: string[], nPath: string[]): SceneRel {
   return p - common === 1 ? 'near' : 'far';               // 旁支:共享直接父才算近
 }
 
-export type NpcPresence = 'present' | 'nearby' | 'absent';
-
 /**
  * NPC 在场分档的**唯一权威**:注入端(inject.ts)与 NPC 页(pages/npcs)都调它,杜绝两套逻辑漂移
  * (NPC 页曾复刻旧逻辑、又没用 locationPath,把主角误定位到同名旁支节点、错判在场——正是本函数要根治的)。
@@ -720,6 +723,9 @@ function applyPlacement(it: { carried?: boolean; location?: string }, src: ItemD
 /**
  * 把 delta 里的随行/所在地信息施加到 NPC 上(仅在 delta 明确给了才覆盖,last-write-wins)。
  * follow=true 时清掉 location(随行 NPC 无固定所在地);follow=false 时保留/采用 location。
+ * location 为空字符串时表示「所在不明」,只清掉旧地点让定点 NPC 不再判在场;
+ * **绝不动 follow**——随行角色本就不需要 location,模型可能顺手写空串,
+ * 是否离队只能由显式 follow 决定,否则会把随行同伴误判成离场(同时清空两样会大范围误伤)。
  * 与物品 applyPlacement 同构(carried↔follow)。
  */
 function applyNpcPlacement(n: { follow?: boolean; location?: string }, src: NpcDelta): void {
@@ -732,6 +738,11 @@ function applyNpcPlacement(n: { follow?: boolean; location?: string }, src: NpcD
     if (loc) {
       n.location = loc;
       if (n.follow === undefined) n.follow = false; // 给了所在地即视为定点
+    } else {
+      // 空字符串=所在不明:清掉旧地点,避免继续判在场。
+      // 不改 follow:模型认为「随行就不必填 location」而顺手写空串时,
+      // 不能因此把随行同伴取消掉(要离队必须显式 follow:false)。
+      n.location = undefined;
     }
   }
 }
@@ -1997,10 +2008,11 @@ export function editNpc(
   const desc = patch.desc?.trim() || undefined;
   const personality = patch.personality?.trim() || undefined;
 
-  // 位置 / 即时层:patch 明确给了用 patch 的;否则从旧 NPC 继承(改名不丢所在地/随行/状态/重要性)
+  // 位置 / 即时层:patch 明确给了用 patch 的;否则从旧 NPC 继承(改名不丢所在地/随行/状态/重要性)。
+  // location 保留空字符串(用户清空输入=所在不明),不能像旧逻辑那样被洗成 undefined 而清不掉。
   const prev = memory.npcs.find(n => n.id === npcId(oldName));
   const follow = patch.follow !== undefined ? patch.follow : prev?.follow;
-  const location = patch.location !== undefined ? (patch.location.trim() || undefined) : prev?.location;
+  const location = patch.location !== undefined ? patch.location.trim() : (prev?.location ?? '');
   const outfit = patch.outfit !== undefined ? (patch.outfit.trim() || undefined) : prev?.outfit;
   const condition = patch.condition !== undefined ? (patch.condition.trim() || undefined) : prev?.condition;
   const important = patch.important !== undefined ? patch.important : prev?.important;

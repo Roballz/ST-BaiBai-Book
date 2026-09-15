@@ -415,9 +415,14 @@ function fmtNpcContext(npcs: MemNpc[], scenes: MemScene[], here: string, locatio
     else absent.push(n);
   }
   const age = (n: MemNpc): string => oneLine(ageDisplay(n.age, n.ageTime, now));
+  // 好感注入开关(设置页「注入设置」):关闭后名册照发,只不附带好感估计。
+  // 摘要副 API 走 fmtNpcSummaryList,不受此开关影响——记录始终照常。
+  const affinityOn = apiSettings.injection.npcAffinity;
+  const aff = (n: MemNpc, partial = false, includeNote = true): string =>
+    affinityOn ? fmtNpcAffinity(n, partial, includeNote) : '';
 
   const lines: string[] = [];
-  if (npcs.some(n => fmtNpcAffinity(n))) lines.push(NPC_AFFINITY_BRIEFING);
+  if (npcs.some(n => aff(n))) lines.push(NPC_AFFINITY_BRIEFING);
   const ties = fmtNpcTiesContext(npcs);
   if (ties) lines.push(ties);
   if (main.length) {
@@ -427,7 +432,7 @@ function fmtNpcContext(npcs: MemNpc[], scenes: MemScene[], here: string, locatio
         const inBracket = [oneLine(n.gender), age(n), oneLine(n.title)].filter(Boolean);
         const head = inBracket.length ? `${n.name}(${inBracket.join('·')})` : n.name;
         const rel = oneLine(n.relation) ? ` —— 与主角:${oneLine(n.relation)}` : '';
-        const affinity = fmtNpcAffinity(n);
+        const affinity = aff(n);
         return `  - ${head}${rel}${affinity ? ` 〔好感估计:${affinity}〕` : ''}${npcStateTail(n, true)}`;
       })
       .join('\n');
@@ -441,7 +446,7 @@ function fmtNpcContext(npcs: MemNpc[], scenes: MemScene[], here: string, locatio
         if (inBracket.length) parts.push(`(${inBracket.join('·')})`);
         const profile: string[] = [];
         if (oneLine(n.relation)) profile.push(`与主角:${oneLine(n.relation)}`);
-        const affinity = fmtNpcAffinity(n);
+        const affinity = aff(n);
         if (affinity) profile.push(`好感估计:${affinity}`);
         if (oneLine(n.personality)) profile.push(`性格:${oneLine(n.personality)}`);
         if (oneLine(n.desc)) profile.push(oneLine(n.desc));
@@ -460,7 +465,7 @@ function fmtNpcContext(npcs: MemNpc[], scenes: MemScene[], here: string, locatio
         const bracket = inBracket.length ? `(${inBracket.join('·')})` : '';
         const profile: string[] = [];
         if (oneLine(n.relation)) profile.push(`与主角:${oneLine(n.relation)}`);
-        const affinity = fmtNpcAffinity(n);
+        const affinity = aff(n);
         if (affinity) profile.push(`好感估计:${affinity}`);
         if (oneLine(n.personality)) profile.push(`性格:${oneLine(n.personality)}`);
         const pers = profile.length ? ` —— ${profile.join(';')}` : '';
@@ -477,7 +482,7 @@ function fmtNpcContext(npcs: MemNpc[], scenes: MemScene[], here: string, locatio
         const inBracket = [oneLine(n.gender), relationHead(n.relation), oneLine(n.title)].filter(Boolean);
         const bracket = inBracket.length ? `(${inBracket.join('·')})` : '';
         const loc = oneLine(n.location);
-        const affinity = fmtNpcAffinity(n, false, false);
+        const affinity = aff(n, false, false);
         return `  - ${n.name}${bracket}${loc ? ` [在:${loc}]` : ''}${affinity ? ` 〔好感估计:${affinity}〕` : ''}`;
       })
       .join('\n');
