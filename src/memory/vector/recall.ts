@@ -72,8 +72,9 @@ function sourceLabel(hit: HybridHit, selfScope: string | null): string {
 function windowLeafIds(chat: STMessage[]): string[] {
   const keepStart = resolveKeepStart(chat);
   const ids: string[] = [];
-  for (let i = keepStart; i < chat.length; i++) {
+  for (let i = apiSettings.autoHideEnabled ? keepStart : 0; i < chat.length; i++) {
     if (chat[i]?.extra?.bbs_omit) continue;
+    if (!apiSettings.autoHideEnabled && chat[i]?.is_system === true) continue;
     if (leafValid(chat[i])) ids.push(getLeaf(chat[i])!.id);
   }
   return ids;
@@ -246,7 +247,7 @@ export async function runVectorRecall(signal?: AbortSignal): Promise<void> {
   const sourceChat = currentChatId();
   const epoch = ++recallEpoch;
   const settingsKey = () => JSON.stringify([apiSettings.vector.recall, apiSettings.vector.knowledge, embeddingIdentity(),
-    apiSettings.vector.queryRewrite, apiSettings.vector.rerank, apiSettings.keepRecent, apiSettings.customStripTags]);
+    apiSettings.vector.queryRewrite, apiSettings.vector.rerank, apiSettings.keepRecent, apiSettings.autoHideEnabled, apiSettings.customStripTags]);
   const settingsAtStart = settingsKey();
   const sourceKey = buildRecallCacheKey(chat, cfg);
   // BM25 从当前聊天有效叶子构建；全文/摘要/删除变化都参与缓存及异步结果复核。

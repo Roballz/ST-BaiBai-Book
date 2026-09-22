@@ -4,7 +4,8 @@ import * as settings from '@/api/settings';
 import * as context from '@/st/context';
 import type { STContext, STMessage } from '@/st/context';
 import * as notices from '@/st/toast';
-import { batchBackfill, checkResummary, currentSummaryPromise, handleGenerationIntercept, openingPendingFloor, planBatches, summarizeFloor, summarizeSelected } from './engine';
+import { batchBackfill, checkResummary, currentSummaryPromise, handleGenerationIntercept, maybeSummarizePrevAi, syncHiddenNow, openingPendingFloor, planBatches, summarizeFloor, summarizeSelected } from './engine';
+import { selectInjectionNodes } from './inject';
 import { buildBatchThinking, buildResummaryPrompt, buildSummaryThinking, RESUMMARY_THINKING_CHECKLIST, RESUMMARY_THINKING_PREFILL, RULE_SUMMARY_COMPOSITION, SUMMARY_OUTPUT_PROTOCOL } from './prompts';
 import { renderSourceHints, SOURCE_HINTS_HEADER } from './sourceHints';
 import { memory } from './store';
@@ -32,6 +33,47 @@ const summary = {
   timeStart: '2026/9/7 10:00',
   timeEnd: '2026/9/7 10:05',
 };
+
+describe('自动隐藏独立开关', () => {
+  const original = { autoHideEnabled: settings.apiSettings.autoHideEnabled, autoSummaryEnabled: settings.apiSettings.autoSummaryEnabled,
+    keepRecent: settings.apiSettings.keepRecent };
+  afterEach(() => Object.assign(settings.apiSettings, original));
+
+  it('关闭后仍自动摘前一层，已隐藏楼层保持原状，未隐藏楼层不注入摘要', async () => {
+    Object.assign(settings.apiSettings, { autoHideEnabled: false, autoSummaryEnabled: true, keepRecent: 0 });
+    const hidden = message(false, { is_system: true, extra: { bbs_hidden: true, bbs_leaf: leaf() } });
+    const chat = [hidden, message(true), message(), message(true)];
+    const old = JSON.stringify(hidden);
+    useChat(chat);
+    await maybeSummarizePrevAi(false);
+    await currentSummaryPromise();
+    expect(client.requestViaMainApi).toHaveBeenCalledOnce();
+    expect(chat[2].extra?.bbs_leaf?.text).toBe(summary.summary);
+    expect(chat[2].is_system).toBe(false);
+    expect(chat[2].extra?.bbs_hidden).toBeUndefined();
+    expect(JSON.stringify(hidden)).toBe(old);
+    expect(selectInjectionNodes([], chat).map(n => n.id)).toEqual(['first-page']);
+    // Even forced synchronization and a changed keep count must preserve existing hidden floors while off.
+    settings.apiSettings.keepRecent = 100;
+    await syncHiddenNow(true);
+    expect(JSON.stringify(hidden)).toBe(old);
+  });
+
+  it('重新开启后恢复原生隐藏同步', async () => {
+    Object.assign(settings.apiSettings, { autoHideEnabled: false, autoSummaryEnabled: true, keepRecent: 0 });
+    const chat = [message(false, { extra: { bbs_leaf: leaf() } }), message(true)];
+    useChat(chat);
+    const ctx = context.getContext()!;
+    ctx.saveChat = vi.fn().mockResolvedValue(undefined);
+    ctx.reloadCurrentChat = vi.fn().mockResolvedValue(undefined);
+    await syncHiddenNow();
+    expect(chat[0].is_system).toBe(false);
+    settings.apiSettings.autoHideEnabled = true;
+    await syncHiddenNow();
+    expect(chat[0].is_system).toBe(true);
+    expect(chat[0].extra?.bbs_hidden).toBe(true);
+  });
+});
 
 beforeEach(() => {
   vi.useFakeTimers();

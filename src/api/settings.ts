@@ -208,8 +208,10 @@ export interface ApiSettings {
   channels: ApiChannel[];
   /** 各任务指派的渠道 id */
   assignments: Record<TaskType, string>;
-  /** 自动摘要开关。开启即一并启用:自动隐藏、正文时间标签、积压拦截(不再各自独立开关)。 */
+  /** 自动摘要开关，同时控制正文时间标签和积压拦截。 */
   autoSummaryEnabled: boolean;
+  /** 自动同步楼层隐藏状态；关闭后保留现有隐藏状态，仍可生成摘要。 */
+  autoHideEnabled: boolean;
   /**
    * 仅摘要模式。继续分析、保存结构化状态,但不向主模型注入当前状态,
    * 也不再把物品/变量变动旁注写回正文。已有正文旁注不主动清理。
@@ -363,6 +365,7 @@ function defaults(): ApiSettings {
     channels: [],
     assignments: { summary: '', resummary: '' },
     autoSummaryEnabled: true,
+    autoHideEnabled: true,
     summaryOnlyMode: false,
     injection: { sceneFocus: true, lifeDetails: true, protagonist: true, npcs: true, npcAffinity: true, items: true, scenes: true },
     keepRecent: 3,
@@ -395,6 +398,7 @@ function normalize(raw: unknown): ApiSettings {
   // prompts 是嵌套对象,展开合并不会补全缺字段,单独兜底(老数据没有 prompts 键时回退默认)
   merged.prompts = { ...d.prompts, ...((raw as Partial<ApiSettings>).prompts ?? {}) };
   // ui 同为嵌套对象,逐字段兜底(老数据没有 ui 键时回退默认,值非字符串时丢弃)
+  merged.autoHideEnabled = typeof merged.autoHideEnabled === 'boolean' ? merged.autoHideEnabled : true;
   const ru = ((raw as Partial<ApiSettings>).ui ?? {}) as Partial<UiPrefs>;
   merged.ui = {
     theme: typeof ru.theme === 'string' ? ru.theme : d.ui.theme,
@@ -624,6 +628,7 @@ function applyInto(target: ApiSettings, src: ApiSettings): void {
   target.channels = src.channels;
   target.assignments = src.assignments;
   target.autoSummaryEnabled = src.autoSummaryEnabled;
+  target.autoHideEnabled = src.autoHideEnabled;
   target.summaryOnlyMode = src.summaryOnlyMode;
   target.injection = src.injection;
   target.keepRecent = src.keepRecent;

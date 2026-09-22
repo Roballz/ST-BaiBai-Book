@@ -635,7 +635,7 @@ export async function handleGenerationIntercept(
   return true;
 }
 
-/** 摘要后的统一收尾:同步滑动隐藏 + 刷新注入(自动隐藏已并入摘要流程,不再有独立开关) */
+/** 摘要后的统一收尾：按自动隐藏开关同步滑动隐藏，并刷新注入。 */
 async function afterSummaryHideAndInject(chat: STMessage[]): Promise<void> {
   await syncWindowHiddenState(chat);
   refreshInjection();
@@ -645,7 +645,7 @@ async function afterSummaryHideAndInject(chat: STMessage[]): Promise<void> {
  * 对外的「检测一次隐藏」:按当前叶子覆盖情况同步滑动窗口隐藏 + 刷新注入。
  * 供迁移等批量写入叶子后调用,复用摘要收尾同一套逻辑;守卫与摘要流程一致
  * (引擎在此聊天不生效 / 自动摘要关闭则不隐藏,仅刷新注入)。force=true 供用户主动导入/删除
- * 旧总结时立即同步覆盖范围,不受自动摘要开关影响。
+ * 旧总结时立即同步覆盖范围,不受自动摘要开关影响；仍遵守自动隐藏开关。
  */
 export async function syncHiddenNow(force = false): Promise<void> {
   const chat = getContext()?.chat ?? [];
@@ -864,6 +864,7 @@ export function coalesceRanges(indices: number[]): Array<[number, number]> {
  * 只隐藏已被摘要覆盖的,绝不制造信息黑洞。
  */
 async function syncWindowHiddenState(chat: STMessage[]): Promise<void> {
+  if (!apiSettings.autoHideEnabled) return;
   const keepStart = resolveKeepStart(chat);
   const covered = coveredSet(chat);
   const imported = importedHistoryRanges();
@@ -889,6 +890,7 @@ async function syncWindowHiddenState(chat: STMessage[]): Promise<void> {
   const exec = ctx.executeSlashCommandsWithOptions;
   if (typeof exec === 'function') {
     for (const [start, end] of coalesceRanges(toUnhide)) {
+      if (!apiSettings.autoHideEnabled) return;
       const arg = start === end ? `${start}` : `${start}-${end}`;
       try {
         for (let i = start; i <= end; i++) {
@@ -914,6 +916,7 @@ async function syncWindowHiddenState(chat: STMessage[]): Promise<void> {
     }
 
     for (const [start, end] of coalesceRanges(toHide)) {
+      if (!apiSettings.autoHideEnabled) return;
       const arg = start === end ? `${start}` : `${start}-${end}`;
       try {
         // 预写私有标记 + 内存态,防止 /hide 异步期间的竞态 saveChat 覆盖
@@ -1939,6 +1942,13 @@ export function bindEngine(): void {
       refreshInjection();
     },
   );
+
+  // 切换自动隐藏只刷新注入与召回缓存，不立即改动任何楼层隐藏状态。
+  watch(() => apiSettings.autoHideEnabled, () => {
+    invalidateRecallCache();
+    clearRecallInjection();
+    refreshInjection();
+  });
 
   // 仅摘要模式切换后立即刷新持久化的 ST 提示槽;正文中的既有旁注不主动清理。
   watch(
