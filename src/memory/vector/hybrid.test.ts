@@ -1,12 +1,30 @@
 import { expect, it } from 'vitest';
 import { fuseCandidates, normalizeHybridLimits, selectRecall, type HybridHit, type RankedHit } from './hybrid';
 
-const config = { rerankCandidates: 20, bm25Candidates: 20, fusionCandidates: 20, bm25Count: 2,
+const config = { rerankCandidates: 20, bm25Candidates: 20, fusionCandidates: 20, bm25Count: 2, rrfCount: 0,
   fullTextCount: 2, finalRecallCount: 6, embeddingThreshold: 0.8, rerankThreshold: 0.9 };
 const hit = (id: string, similarity: number | null = 0.85): HybridHit => ({ leafId: id, scope: 'chat:A',
   document: `摘要 ${id}`, mesFull: `原文 ${id}`, storyTime: null, msgIndex: 1, queryIndex: 0, similarity });
 const ranked = (ids: string[]): RankedHit[] => ids.map(id => ({ ...hit(id), rerankScore: 0.95 }));
 const lexical = (ids: string[]) => ids.map((id, i) => ({ ...hit(id, null), bm25Score: 10 - i }));
+
+it('RRF 摘要跳过原文与 BM25 后顺延，低向量分可补入且共享总额', () => {
+  const fused = ['A', 'B', 'C', 'D', 'E'].map(id => hit(id, 0.1));
+  const selected = selectRecall(ranked(['A']), lexical(['B']), [hit('V')],
+    { ...config, rrfCount: 2, finalRecallCount: 5 }, fused);
+  expect(selected.map(s => [s.hit.leafId, s.route])).toEqual([
+    ['A', 'full'], ['B', 'bm25'], ['C', 'rrf'], ['D', 'rrf'], ['V', 'vector'],
+  ]);
+  expect(selectRecall(ranked(['A']), lexical(['B']), [],
+    { ...config, rrfCount: 20, finalRecallCount: 2 }, fused)).toHaveLength(2);
+  expect(selectRecall([], [], [hit('V')], config, fused).map(s => s.hit.leafId)).toEqual(['V']);
+  expect(normalizeHybridLimits({ ...config, rrfCount: NaN }).rrfCount).toBe(0);
+});
+
+it('原文只受 rerank 门槛及额度限制，不要求 embedding 达标', () => {
+  const selected = selectRecall([{ ...hit('A', 0.1), rerankScore: 0.95 }], [], [], config);
+  expect(selected.map(s => s.route)).toEqual(['full']);
+});
 
 it('去重 RRF 让双路命中靠前，保留向量分与 BM25 分；不同 scope 不混原文', () => {
   const result = fuseCandidates([hit('A'), hit('B'), hit('B')], lexical(['C', 'B']), 4);

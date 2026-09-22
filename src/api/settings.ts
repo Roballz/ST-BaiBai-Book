@@ -90,8 +90,8 @@ export interface VectorEndpoint {
  * 召回参数。召回管线:
  *  ① 向量按最高余弦取候选；可选 BM25 独立取候选，两路去重、RRF 后进入 rerank。
  *     候选阶段不套 embedding 阈值。BM25 关闭时保留原生向量候选路线。
- *  ② rerank 达阈值的先占原文额度；BM25 自身榜跳过已选切片后补摘要；向量摘要最后补余量。
- *  ③ 向量摘要须过 embeddingThreshold，BM25 摘要独立配额；三者合计 ≤ finalRecallCount。
+ *  ② rerank 达阈值的先占原文额度；BM25、RRF 独立榜依次跳过已选切片补摘要；向量摘要最后补余量。
+ *  ③ 仅向量摘要须过 embeddingThreshold；四档合计 ≤ finalRecallCount。
  */
 export interface VectorRecallSettings {
   /** 召回内容注入深度:D0 最贴近最新输入,数字越大越靠前。 */
@@ -104,6 +104,8 @@ export interface VectorRecallSettings {
   fusionCandidates: number;
   /** 注入中 BM25 摘要的最大数，已升原文的条目不占此额度。 */
   bm25Count: number;
+  /** 独立 RRF 摘要名额，跳过已选原文和 BM25 摘要；0 关闭。 */
+  rrfCount: number;
   /** embedding 相似度阈值:仅用于 ② 摘要档准入门槛(低于此连摘要都不召回);不影响 ① 取候选 */
   embeddingThreshold: number;
   /** rerank 得分阈值:≥ 进全文档,< 退摘要档 */
@@ -350,6 +352,7 @@ function defaults(): ApiSettings {
         bm25Candidates: 0,
         fusionCandidates: 20,
         bm25Count: 2,
+        rrfCount: 0,
         embeddingThreshold: 0.8,
         rerankThreshold: 0.9,
         fullTextCount: 2,

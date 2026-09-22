@@ -26,7 +26,7 @@ beforeEach(() => {
     setItem: (k: string, v: string) => cache.set(k, v), removeItem: (k: string) => cache.delete(k) });
   settings.apiSettings.vector.enabled = true; settings.apiSettings.vector.knowledge.enabled = false;
   Object.assign(settings.apiSettings.vector.recall, { minAiFloors: 0, rerankCandidates: 4, bm25Candidates: 5,
-    fusionCandidates: 1, bm25Count: 2, finalRecallCount: 4, fullTextCount: 1, embeddingThreshold: 0.8, rerankThreshold: 0.9 });
+    fusionCandidates: 1, bm25Count: 2, rrfCount: 0, finalRecallCount: 4, fullTextCount: 1, embeddingThreshold: 0.8, rerankThreshold: 0.9 });
   vi.spyOn(settings, 'engineActiveHere').mockReturnValue(true);
   vi.spyOn(scope, 'currentVectorDb').mockReturnValue(crypto.randomUUID());
   vi.spyOn(scope, 'currentChatId').mockImplementation(() => chatId);
@@ -59,6 +59,22 @@ it('真实 BM25 候选 A 升原文，独立榜 B/C 补齐，D 向量补位；原
   for (const id of ['B', 'C', 'D']) expect(finalText()).toContain(`${id} 摘要`);
   expect(finalText()).not.toContain('B 原文'); expect(recallDebug.bm25).toHaveLength(4);
   await runVectorRecall(); expect(rewrite.rewriteQuery).toHaveBeenCalledTimes(1);
+});
+
+it('RRF 独立摘要可越过重排截断，修改额度使缓存失效，关闭 BM25 不走 RRF', async () => {
+  settings.apiSettings.vector.recall.bm25Count = 0;
+  vi.mocked(store.vecSearch).mockResolvedValue({ results: [] });
+  await runVectorRecall();
+  expect(finalText()).not.toContain('B 摘要');
+  settings.apiSettings.vector.recall.rrfCount = 1;
+  await runVectorRecall();
+  expect(finalText()).toContain('A 原文');
+  expect(finalText()).toContain('B 摘要');
+  expect(finalText()).not.toContain('C 摘要');
+  expect(rewrite.rewriteQuery).toHaveBeenCalledTimes(2);
+  settings.apiSettings.vector.recall.bm25Candidates = 0;
+  await runVectorRecall();
+  expect(finalText()).not.toContain('B 摘要');
 });
 
 it('BM25 独有候选可以经 rerank 升原文，不要求 embedding 达标', async () => {

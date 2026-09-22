@@ -12,6 +12,7 @@ export interface HybridLimits {
   bm25Candidates: number;
   fusionCandidates: number;
   bm25Count: number;
+  rrfCount: number;
   fullTextCount: number;
   finalRecallCount: number;
   embeddingThreshold: number;
@@ -24,7 +25,7 @@ export function normalizeHybridLimits<T extends HybridLimits>(cfg: T): T {
   return { ...cfg, rerankCandidates: boundedCount(cfg.rerankCandidates, 20),
     bm25Candidates: boundedCount(cfg.bm25Candidates, 0),
     fusionCandidates: boundedCount(cfg.fusionCandidates, cfg.rerankCandidates || 20),
-    bm25Count: boundedCount(cfg.bm25Count, 2), fullTextCount: boundedCount(cfg.fullTextCount, 2),
+    bm25Count: boundedCount(cfg.bm25Count, 2), rrfCount: boundedCount(cfg.rrfCount, 0), fullTextCount: boundedCount(cfg.fullTextCount, 2),
     finalRecallCount: boundedCount(cfg.finalRecallCount, 5) };
 }
 
@@ -51,10 +52,11 @@ export function fuseCandidates(vector: HybridHit[], lexical: HybridHit[], limit:
   return [...merged.values()].sort((a, b) => b.rrfScore! - a.rrfScore!).slice(0, limit);
 }
 
-export interface SelectedHit { hit: HybridHit; tier: 'full' | 'brief'; route: 'full' | 'bm25' | 'vector' }
-/** 先正文，再独立 BM25 榜顺延补位，最后向量摘要；三路共享一个已选身份集合。 */
+export interface SelectedHit { hit: HybridHit; tier: 'full' | 'brief'; route: 'full' | 'bm25' | 'rrf' | 'vector' }
+/** 正文 → BM25 → RRF → 向量；独立榜顺延补位，共享已选身份集合和总额度。 */
 export function selectRecall(
   ranked: RankedHit[], lexical: HybridHit[], vector: HybridHit[], limits: HybridLimits,
+  fused: HybridHit[] = [],
 ): SelectedHit[] {
   const cfg = normalizeHybridLimits(limits);
   const selected: SelectedHit[] = [];
@@ -69,6 +71,7 @@ export function selectRecall(
   };
   pick(ranked.filter(h => h.rerankScore !== null && h.rerankScore >= cfg.rerankThreshold), cfg.fullTextCount, 'full', 'full');
   pick(lexical, cfg.bm25Count, 'brief', 'bm25');
+  pick(fused, cfg.rrfCount, 'brief', 'rrf');
   pick(vector.filter(h => h.similarity !== null && h.similarity >= cfg.embeddingThreshold), cfg.finalRecallCount, 'brief', 'vector');
   return selected;
 }

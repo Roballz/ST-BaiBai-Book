@@ -1404,7 +1404,12 @@ function exportPublicApiDocument() {
             <span class="bbs-field-label">最大 BM25 摘要数</span>
             <input v-model.number="apiSettings.vector.recall.bm25Count" class="bbs-input bbs-num" type="number" min="0" max="200" step="1" :disabled="!apiSettings.vector.enabled || apiSettings.vector.recall.bm25Candidates <= 0" />
           </label>
-          <p class="bbs-field-hint">BM25 摘要在注入总数内的最大名额；已升原文的不占此额度，空位交给向量摘要。0 = BM25 仅参与原文候选。</p>
+          <p class="bbs-field-hint">BM25 摘要在注入总数内的最大名额；已升原文的不占此额度，空位依次交给 RRF、向量摘要。0 = 不保留独立 BM25 摘要名额。</p>
+          <label class="bbs-num-row">
+            <span class="bbs-field-label">最大 RRF 摘要数</span>
+            <input v-model.number="apiSettings.vector.recall.rrfCount" class="bbs-input bbs-num" type="number" min="0" max="200" step="1" :disabled="!apiSettings.vector.enabled || apiSettings.vector.recall.bm25Candidates <= 0" />
+          </label>
+          <p class="bbs-field-hint">0 = 关闭。原文、BM25 摘要选完后，从完整 RRF 榜跳过重复项，顺延取前 K 条摘要；不要求 embedding 或 rerank 达标，不受重排候选上限截断。优先于向量摘要，四档共享注入总数，空位交给向量。</p>
 
           <label class="bbs-num-row">
             <span class="bbs-field-label">Embedding 阈值</span>
@@ -1418,7 +1423,7 @@ function exportPublicApiDocument() {
               :disabled="!apiSettings.vector.enabled"
             />
           </label>
-          <p class="bbs-field-hint">向量摘要的准入门槛(0~1)，不限制独立 BM25 摘要，也不阻止候选通过 rerank 升原文。</p>
+          <p class="bbs-field-hint">向量摘要的准入门槛(0~1)，不限制独立 BM25、RRF 摘要，也不阻止候选通过 rerank 升原文。</p>
 
           <label class="bbs-num-row">
             <span class="bbs-field-label">Rerank 阈值</span>
@@ -1456,7 +1461,7 @@ function exportPublicApiDocument() {
               :disabled="!apiSettings.vector.enabled"
             />
           </label>
-          <p class="bbs-field-hint">原文 + BM25 摘要 + 向量摘要的合计上限；不足不强行填满。原文优先，BM25 其次，向量补余量。知识库继续使用独立额度。</p>
+          <p class="bbs-field-hint">原文 + BM25 摘要 + RRF 摘要 + 向量摘要的合计上限；不足不强行填满。按上述顺序分配，向量补余量。知识库继续使用独立额度。</p>
           <p class="bbs-field-hint">重排失败沿用原生向量回退：余弦分仍可能满足原文阈值；BM25 独有命中只补摘要，不用 BM25/RRF 分数升原文。</p>
 
           <label class="bbs-num-row">

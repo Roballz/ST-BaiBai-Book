@@ -159,6 +159,7 @@ function recallParamFingerprint(cfg: typeof apiSettings.vector.recall): string {
     cfg.bm25Candidates,
     cfg.fusionCandidates,
     cfg.bm25Count,
+    cfg.rrfCount,
     cfg.embeddingThreshold,
     cfg.rerankThreshold,
     cfg.fullTextCount,
@@ -358,14 +359,15 @@ export async function runVectorRecall(signal?: AbortSignal): Promise<void> {
     // 3) rerank(用 INTENT/重写 query;渠道未配 → 降级:用 embedding 序,score 复用 similarity)
     if (!stillCurrent()) return;
     const hybridEnabled = cfg.bm25Candidates > 0;
-    const candidates: HybridHit[] = hybridEnabled
-      ? fuseCandidates(results, bm25Results, cfg.fusionCandidates) : results;
+    // 摘要补位使用完整融合榜，不被送入 rerank 的候选上限截断。
+    const fused = hybridEnabled ? fuseCandidates(results, bm25Results, results.length + bm25Results.length) : [];
+    const candidates: HybridHit[] = hybridEnabled ? fused.slice(0, cfg.fusionCandidates) : results;
     setRecallFusion(candidates);
     const ranked = candidates.length ? await rerankCandidates(rerankQuery, candidates, signal) : [];
 
     // 4) 分档 + 上限(now = 故事内最新时间,作相对时间参照点,对齐历史摘要注入)
     const now = latestStoryTime(chat);
-    const selected = selectRecall(ranked, bm25Results, hybridEnabled ? results : ranked, cfg);
+    const selected = selectRecall(ranked, bm25Results, hybridEnabled ? results : ranked, cfg, fused);
     const { text: summaryText, tiers } = buildRecallText(selected, selfScope, now);
     const text = [summaryText, knowledgeText].filter(Boolean).join('\n\n');
     if (!stillCurrent()) return;
