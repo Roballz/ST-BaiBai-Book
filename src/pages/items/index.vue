@@ -1,12 +1,18 @@
 <script setup lang="ts">
 import Icon from '@/components/Icon.vue';
+import Collapsible from '@/components/Collapsible.vue';
 import ModalMask from '@/components/ModalMask.vue';
 import SummaryOnlyNotice from '@/components/SummaryOnlyNotice.vue';
 import { appendOpToLatestLeaf, editItem } from '@/memory/apply';
 import { derivedMeta, memory } from '@/memory/store';
 import { computed, ref } from 'vue';
+import { getContext } from '@/st/context';
+import { useItemGroups } from './groups';
 
 const newName = ref('');
+const adding = ref(false);
+const { groups, pending, refresh } = useItemGroups(() => memory.items,
+  () => `${getContext()?.characterId ?? ''}:${getContext()?.getCurrentChatId?.() ?? ''}`);
 
 function toggleMode(name: string, mode: 'important' | 'hidden', value: boolean) {
   appendOpToLatestLeaf({ items: { update: [{ name, [mode]: value,
@@ -22,6 +28,7 @@ function addItem() {
   if (!name) return;
   if (!appendOpToLatestLeaf({ items: { add: [{ name }] } })) return;
   newName.value = '';
+  adding.value = false;
 }
 
 function removeItem(id: string) {
@@ -86,11 +93,22 @@ function saveEdit() {
 
 <template>
   <section class="bbs-page">
-    <h2 class="bbs-title bbs-title-sub">物品</h2>
+    <div class="bbs-items-toolbar">
+      <h2 class="bbs-title bbs-title-sub">物品</h2>
+      <div class="bbs-items-tools">
+        <button class="bbs-item-act" :class="{ 'is-selected': pending }" type="button"
+          :title="pending ? '刷新分组：有物品模式已改变' : '刷新物品分组'" aria-label="刷新物品分组" @click="refresh">
+          <Icon name="refresh" />
+        </button>
+        <button class="bbs-item-act" type="button" title="添加物品" aria-label="添加物品"
+          :disabled="!hasLeaf" :aria-expanded="adding" @click="adding = !adding"><Icon name="plus" /></button>
+      </div>
+    </div>
     <SummaryOnlyNotice subject="物品清单与变动" />
     <p class="bbs-item-desc">★ 常驻完整设定；隐藏时仅关键词命中才注入。两种模式互斥，仍受物品注入总开关控制。</p>
+    <p class="bbs-item-desc">修改模式立即生效，点击右上角刷新后才重新分组。</p>
 
-    <div class="bbs-additem">
+    <div v-if="adding" class="bbs-additem">
       <input
         v-model="newName"
         class="bbs-input"
@@ -104,8 +122,11 @@ function saveEdit() {
 
     <hr class="bbs-rule" />
 
-    <div v-if="memory.items.length" class="bbs-item-list">
-      <div v-for="it in memory.items" :key="it.id" class="bbs-item">
+    <div class="bbs-item-groups">
+      <Collapsible v-for="group in groups" :key="group.id" :title="`${group.title}（${group.items.length}）`" :open="false">
+      <div class="bbs-item-list">
+      <p v-if="!group.items.length" class="bbs-item-desc">此分组暂无物品。</p>
+      <div v-for="it in group.items" :key="it.id" class="bbs-item">
         <div class="bbs-item-head">
           <div class="bbs-item-main">
             <span class="bbs-item-name" :title="it.name">{{ it.name }}</span>
@@ -138,9 +159,11 @@ function saveEdit() {
         <span v-if="it.keywords?.length" class="bbs-item-desc">关键词：{{ it.keywords.join('、') }}</span>
         <span v-if="it.history" class="bbs-item-desc bbs-item-history">历史起源：{{ it.history }}</span>
       </div>
+      </div>
+      </Collapsible>
     </div>
 
-    <div v-else class="bbs-empty">
+    <div v-if="!memory.items.length" class="bbs-empty">
       <span class="bbs-empty-icon"><Icon name="items" /></span>
       <p>暂时空空如也。摘要时得到的物品会自动登记,也可手动添加。</p>
     </div>
@@ -195,6 +218,10 @@ function saveEdit() {
 </template>
 
 <style scoped>
+.bbs-items-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.bbs-items-tools { display: flex; gap: 4px; flex-shrink: 0; }
+.bbs-item-groups { display: flex; flex-direction: column; gap: 10px; }
+.bbs-item-act:disabled { opacity: 0.4; cursor: not-allowed; }
 .bbs-page {
   height: 100%;
   display: flex;
