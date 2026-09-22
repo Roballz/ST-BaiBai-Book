@@ -147,7 +147,7 @@ function dotNormalized(a: Float32Array, b: Float32Array): number {
   return dot / norm;
 }
 
-const localStore: VectorStore = {
+export const localStore: VectorStore = {
   kind: 'local',
 
   async upsert(database, scope, items) {

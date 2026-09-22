@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import Collapsible from '@/components/Collapsible.vue';
+import KnowledgePanel from '@/components/KnowledgePanel.vue';
 import ConfirmDialog from '@/components/ConfirmDialog.vue';
 import BbsSelect from '@/components/BbsSelect.vue';
 import Icon from '@/components/Icon.vue';
@@ -1461,6 +1462,7 @@ function exportPublicApiDocument() {
         <hr class="bbs-rule" />
 
         <!-- 索引维护:把当前聊天的叶子摘要补建/对账进向量库 -->
+        <KnowledgePanel />
         <div class="bbs-vec-recall" :class="{ 'is-disabled': !apiSettings.vector.enabled }">
           <div class="bbs-vec-head">
             <span class="bbs-field-label">索引维护</span>

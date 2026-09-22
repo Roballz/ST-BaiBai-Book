@@ -28,6 +28,7 @@ import { cleanBody, compactTimeLabel, latestStoryTime, splitTimeLabel } from '..
 import { relativeTimeLabel } from '../timeRel';
 import { normalizeRecallInjectionDepth } from './depth';
 import { RECALL_CACHE_STORAGE_KEY } from './cache';
+import { eligibleKnowledge, embeddingIdentity, knowledgeDebug, knowledgeFingerprint, listKnowledge, recallKnowledge } from './knowledge';
 import {
   previewOf,
   resetRecallDebug,
@@ -194,6 +195,7 @@ function buildRecallCacheKey(chat: STMessage[], cfg: typeof apiSettings.vector.r
 }
 
 let recalling = false;
+let recallEpoch = 0;
 
 /** 召回是否在当前聊天生效。 */
 function recallActiveHere(): boolean {
@@ -210,6 +212,7 @@ export function shouldRecallForType(type: string | undefined): boolean {
 
 /** 清空召回注入槽(降级/未命中/切聊天时)。 */
 export function clearRecallInjection(): void {
+  recallEpoch++;
   getContext()?.setExtensionPrompt?.(RECALL_INJECT_KEY, '', IN_CHAT, recallInjectionDepth(), false, ROLE_SYSTEM, null);
 }
 
@@ -231,38 +234,62 @@ export async function runVectorRecall(signal?: AbortSignal): Promise<void> {
   const fn = ctx?.setExtensionPrompt;
   if (typeof fn !== 'function' || !chat.length) return;
 
-  // 楼层还少 / 全在窗口内且无旧档:本回合无召回价值,跳过整条管线(清空注入槽,避免残留上次召回)。
-  if (!recallWorthRunning(chat)) {
-    setRecallStatus('未召回:楼层未达起召门槛或全在窗口内');
-    clearRecallInjection();
-    return;
-  }
-
-  const cfg = apiSettings.vector.recall;
+  const cfg = { ...apiSettings.vector.recall };
+  const knowledgeConfig = { ...apiSettings.vector.knowledge };
   const scopes = recallScopes();
-
-  // 缓存命中(重生成/翻页且召回输入未变):直接复用上次注入文本 + 调试快照,跳过整条管线。
-  const cacheKey = buildRecallCacheKey(chat, cfg);
-  const cached = cacheKey ? loadRecallCache() : null;
-  if (cacheKey && cached && cached.key === cacheKey) {
-    fn(RECALL_INJECT_KEY, cached.text, IN_CHAT, recallInjectionDepth(), false, ROLE_SYSTEM, null);
-    restoreRecallDebug(cached.debug);
-    setRecallStatus(`${cached.debug.status}(复用缓存)`);
-    return;
-  }
-
+  const sourceChat = currentChatId();
+  const epoch = ++recallEpoch;
+  const settingsKey = () => JSON.stringify([apiSettings.vector.recall, apiSettings.vector.knowledge, embeddingIdentity(),
+    apiSettings.vector.queryRewrite, apiSettings.vector.rerank, apiSettings.keepRecent]);
+  const settingsAtStart = settingsKey();
+  const sourceKey = buildRecallCacheKey(chat, cfg);
+  const stillCurrent = () => !signal?.aborted && epoch === recallEpoch && recallActiveHere() &&
+    currentVectorDb() === database && currentChatId() === sourceChat && settingsKey() === settingsAtStart &&
+    buildRecallCacheKey(getContext()?.chat ?? [], cfg) === sourceKey;
   recalling = true;
+  fn(RECALL_INJECT_KEY, '', IN_CHAT, recallInjectionDepth(), false, ROLE_SYSTEM, null);
   try {
+    let files: Awaited<ReturnType<typeof listKnowledge>> = [];
+    let knowledgeStoreReady = true;
+    if (knowledgeConfig.enabled) {
+      try { files = await listKnowledge(database); }
+      catch { knowledgeStoreReady = false; knowledgeDebug.status = '知识库本机存储不可用'; }
+    }
+    if (!stillCurrent()) return;
+    const fingerprint = knowledgeFingerprint(files);
+    const summaryWanted = recallWorthRunning(chat);
+    const knowledgeWanted = eligibleKnowledge(files, knowledgeConfig).length > 0;
+    if (!summaryWanted && !knowledgeWanted) {
+      setRecallStatus('未召回:没有可召回的旧摘要或启用的知识库');
+      return;
+    }
+    // Knowledge revisions/configuration and character identity participate in cache invalidation.
+    const cacheKey = sourceKey ? `${database}|${sourceKey}|${fnv1a(settingsAtStart)}|${fingerprint}|${summaryWanted}` : null;
+    const cached = cacheKey ? loadRecallCache() : null;
+    if (cached && cached.key === cacheKey) {
+      fn(RECALL_INJECT_KEY, cached.text, IN_CHAT, recallInjectionDepth(), false, ROLE_SYSTEM, null);
+      restoreRecallDebug(cached.debug);
+      knowledgeDebug.hits = [];
+      knowledgeDebug.status = '复用已缓存的联合召回文本';
+      setRecallStatus(`${cached.debug.status}(复用缓存)`);
+      return;
+    }
     // 开一次新调试快照(进入有效召回路径才记录,避免「功能未启用」时反复清空上次结果)
     resetRecallDebug();
 
     // 召回前先补齐窗口外缺失的向量索引(载入老聊天/向量后开 → 旧叶子可能从未索引),
     // 否则这些旧剧情会直接漏召回。只阻塞窗口外,窗口内交给防抖增量。
-    await ensureRecallIndex(signal);
+    let summaryReady = summaryWanted;
+    if (summaryWanted) {
+      try { await ensureRecallIndex(signal); }
+      catch (error) { summaryReady = false; console.warn('[柏宝书] 摘要索引不可用，继续知识库召回', error); }
+    }
+    if (!stillCurrent()) return;
 
     // 1) 查询重写(强制启用,无降级):得多条 query 向量 + rerank 用的 query 文本。
     // 重写失败/无 query 会抛错 → 落到外层 catch,清空注入槽、结束本次召回。
     const { queryVectors, rerankQuery } = await resolveQueryVectors(signal);
+    if (!stillCurrent()) return;
     if (!queryVectors.length) {
       setRecallStatus('未召回:查询重写未产出 query');
       clearRecallInjection();
@@ -272,10 +299,13 @@ export async function runVectorRecall(signal?: AbortSignal): Promise<void> {
     // 2) 后端检索:多路在范围内纯按 embedding 得分取前 rerankCandidates(后端 max 融合,不套阈值),排除窗口内叶子
     const exclude = windowLeafIds(chat);
     const selfScope = currentChatScope();
-    const { results } = await vecSearch(database, scopes, queryVectors, {
-      topK: Math.max(1, cfg.rerankCandidates),
-      excludeLeafIds: exclude,
-    });
+    let results: VecHit[] = [];
+    if (summaryReady) {
+      try { results = (await vecSearch(database, scopes, queryVectors, {
+        topK: Math.max(1, cfg.rerankCandidates), excludeLeafIds: exclude,
+      })).results; }
+      catch (error) { summaryReady = false; console.warn('[柏宝书] 摘要检索失败，继续知识库召回', error); }
+    }
     setRecallEmbedding(
       results.map(h => ({
         leafId: h.leafId,
@@ -286,28 +316,34 @@ export async function runVectorRecall(signal?: AbortSignal): Promise<void> {
         preview: previewOf(h.document),
       })),
     );
-    if (!results.length) {
-      setRecallStatus('未召回:检索无候选');
-      clearRecallInjection();
-      return;
-    }
+    let knowledgeText = '';
+    let knowledgeFailed = false;
+    knowledgeDebug.hits = [];
+    if (knowledgeWanted) {
+      try { knowledgeText = await recallKnowledge(database, files, queryVectors, knowledgeConfig); }
+      catch { knowledgeFailed = true; knowledgeDebug.status = '知识库检索失败，本轮只使用摘要召回'; }
+    } else knowledgeDebug.status = '知识库未启用或无匹配当前 Embedding 配置的文件';
 
     // 3) rerank(用 INTENT/重写 query;渠道未配 → 降级:用 embedding 序,score 复用 similarity)
-    const ranked = await rerankCandidates(rerankQuery, results, signal);
+    const ranked = results.length ? await rerankCandidates(rerankQuery, results, signal) : [];
 
     // 4) 分档 + 上限(now = 故事内最新时间,作相对时间参照点,对齐历史摘要注入)
     const now = latestStoryTime(chat);
-    const { text, tiers } = buildRecallText(ranked, cfg, selfScope, now);
+    const { text: summaryText, tiers } = buildRecallText(ranked, cfg, selfScope, now);
+    const text = [summaryText, knowledgeText].filter(Boolean).join('\n\n');
+    if (!stillCurrent()) return;
+    if (knowledgeConfig.enabled && knowledgeStoreReady && knowledgeFingerprint(await listKnowledge(database)) !== fingerprint) return;
+    if (!stillCurrent()) return;
     recordRerankDebug(ranked, tiers, selfScope);
     fn(RECALL_INJECT_KEY, text, IN_CHAT, recallInjectionDepth(), false, ROLE_SYSTEM, null);
     setRecallInjected(text);
     setRecallStatus(text ? '召回完成' : '召回完成:无内容达标,本回合未注入');
     // 实算成功才落缓存(失败/降级路径不缓存,下次重试)。存调试快照供命中时还原面板。
-    if (cacheKey) saveRecallCache({ key: cacheKey, text, debug: snapshotRecallDebug() });
+    if (cacheKey && knowledgeStoreReady && !knowledgeFailed && (!summaryWanted || summaryReady)) saveRecallCache({ key: cacheKey, text, debug: snapshotRecallDebug() });
   } catch (e) {
     console.warn('[柏宝书向量] 召回失败(降级为不召回):', e);
     setRecallStatus(`失败:${e instanceof Error ? e.message : String(e)}`);
-    clearRecallInjection();
+    if (stillCurrent()) fn(RECALL_INJECT_KEY, '', IN_CHAT, recallInjectionDepth(), false, ROLE_SYSTEM, null);
   } finally {
     recalling = false;
   }
