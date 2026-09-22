@@ -73,14 +73,17 @@ it('实际状态注入：普通寄存简表、星标全量、隐藏零信息、�
   expect(inject.buildStateInjectionText()).toContain('古剑');
   expect(inject.buildStateInjectionText()).not.toContain('蓝色剑身');
   appendOpToLatestLeaf({ items: { update: [{ name: item.name, important: true }] } });
-  for (const text of ['蓝色剑身', '持有人:艾琳', '历史起源:铸于北城', '关键词:剑鞘、信物']) {
+  for (const text of ['蓝色剑身', '持有人:艾琳', '历史起源:铸于北城']) {
     expect(inject.buildStateInjectionText()).toContain(text);
   }
+  expect(inject.buildStateInjectionText()).not.toContain('关键词:');
+  expect(inject.buildStateInjectionText()).not.toContain('剑鞘');
   appendOpToLatestLeaf({ items: { update: [{ name: item.name, hidden: true }] } });
   expect(inject.buildStateInjectionText()).not.toContain('古剑');
   ctx.chat.push({ ...message({}, '请看看信物'), is_user: true });
   expect(inject.buildStateInjectionText()).toContain('蓝色剑身');
   expect(inject.buildStateInjectionText()).toContain('铸于北城');
+  expect(inject.buildStateInjectionText()).not.toContain('关键词:');
   apiSettings.injection.items = false;
   expect(inject.buildStateInjectionText()).not.toContain('古剑');
   expect(itemInjectionMode({ hidden: true, important: true, keywords: ['  '] }, '正文')).toBe('hidden');
@@ -110,5 +113,6 @@ it('默认和旧自定义摘要模板均包含字段协议', () => {
     expect(prompt.system + prompt.user).toContain('historyAppend');
     expect(prompt.system + prompt.user).toContain('keywords');
     expect(prompt.system + prompt.user).toContain('holder');
+    expect(prompt.user).toContain('关键词:剑鞘、信物');
   }
 });

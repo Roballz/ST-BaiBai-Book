@@ -785,7 +785,7 @@ function oneLine(s: string | undefined): string {
   return (s ?? '').replace(/\s*[\r\n]+\s*/g, ' ').trim();
 }
 
-export function fmtItems(items: BuildArgs['items']): string {
+export function fmtItems(items: BuildArgs['items'], includeKeywords = true): string {
   if (!items.length) return '  (无)';
   return items
     .map(i => {
@@ -795,7 +795,7 @@ export function fmtItems(items: BuildArgs['items']): string {
       const place = i.carried === false ? ` [存:${oneLine(i.location) || '某处'}]` : '';
       const details = [
         i.holder ? `持有人:${oneLine(i.holder)}` : '',
-        i.keywords?.length ? `关键词:${i.keywords.map(oneLine).join('、')}` : '',
+        includeKeywords && i.keywords?.length ? `关键词:${i.keywords.map(oneLine).join('、')}` : '',
         i.history ? `历史起源:${oneLine(i.history)}` : '',
       ].filter(Boolean).join('；');
       return `  - ${i.name}${qty}${place}${desc}${details ? ` [${details}]` : ''}`;

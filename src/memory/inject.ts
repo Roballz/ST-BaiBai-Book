@@ -514,7 +514,7 @@ function fmtItemContext(items: MemItem[], scenes: MemScene[], here: string, loca
   }
 
   const blocks = [
-    `物品清单:\n${fmtItems(reachable)}`,
+    `物品清单:\n${fmtItems(reachable, false)}`,
   ];
   if (elsewhere.length) {
     const brief = elsewhere
