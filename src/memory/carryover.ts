@@ -126,6 +126,11 @@ function encodeStateAsDelta(state: ReturnType<typeof deriveMemory>, leafId: stri
   if (state.items.length) {
     delta.items = {
       add: state.items.map(i => ({
+        keywords: i.keywords,
+        holder: i.holder,
+        history: i.history,
+        important: i.important,
+        hidden: i.hidden,
         name: i.name,
         qty: i.qty,
         desc: i.desc,

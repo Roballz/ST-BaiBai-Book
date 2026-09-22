@@ -1,6 +1,7 @@
 import { apiSettings } from '@/api/settings';
 import { getContext, setMessageText, type STMessage } from '@/st/context';
 import { fmtItemLogInline } from './prompts';
+import { applyItemFields } from './items';
 import { lifeDetailSubject, mergeLifeDetailsOp, sameLifeDetail } from './lifeDetails';
 import { mergeProtagonistDelta } from './protagonist';
 import { applyNpcAffinity, cleanNpcAffinityLevel } from './npcRelations';
@@ -106,6 +107,12 @@ function cleanItemDelta(raw: unknown): ItemDelta | null {
   return {
     name,
     desc: optText(raw.desc),
+    keywords: Array.isArray(raw.keywords) ? cleanTextList(raw.keywords) : undefined,
+    holder: patchText(raw.holder),
+    history: patchText(raw.history),
+    historyAppend: optText(raw.historyAppend),
+    important: optBool(raw.important),
+    hidden: optBool(raw.hidden),
     qty: optNumber(raw.qty),
     carried: optBool(raw.carried),
     location: optText(raw.location),
@@ -1185,6 +1192,7 @@ function applyStoredDeltaTo(mem: BaibaiMemory, d: StoredDelta, leaf: { id: strin
         const before = ex.qty;
         const next = (ex.qty ?? 1) + step; // 原不计数旧数据按 1 起算
         if (add.desc) ex.desc = add.desc;
+        applyItemFields(ex, add);
         applyPlacement(ex, add); // 随身/地点(明确给了才覆盖)
         if (next <= 0) {
           mem.items.splice(mem.items.indexOf(ex), 1); // 减到 0 → 移除
@@ -1204,6 +1212,7 @@ function applyStoredDeltaTo(mem: BaibaiMemory, d: StoredDelta, leaf: { id: strin
           updatedAt: t,
         };
         applyPlacement(it, add);
+        applyItemFields(it, add);
         mem.items.push(it);
         log('add', add.name.trim(), undefined, step);
       }
@@ -1215,6 +1224,7 @@ function applyStoredDeltaTo(mem: BaibaiMemory, d: StoredDelta, leaf: { id: strin
       if (!it) continue; // 容错:更新不存在的项则忽略
       const before = it.qty;
       if (upd.desc) it.desc = upd.desc;
+      applyItemFields(it, upd);
       applyPlacement(it, upd); // 随身/地点变更(移动物品)
       if (typeof upd.qty === 'number') {
         if (upd.qty <= 0) {
@@ -1598,6 +1608,14 @@ export function finalizeDelta(delta: SummaryDelta, openPlansOrdered: { id: strin
     const items: NonNullable<StoredDelta['items']> = {};
     const add = cleanItemList(delta.items.add);
     const update = cleanItemList(delta.items.update);
+    // AI may update facts, but cannot override the user's injection controls.
+    for (const item of [...add, ...update]) {
+      delete item.important;
+      delete item.hidden;
+      // Repeated add can also target an existing item; never erase its provenance.
+      item.historyAppend = [item.history, item.historyAppend].filter(Boolean).join('\n') || undefined;
+      delete item.history;
+    }
     const remove = cleanTextList(delta.items.remove, ['name', 'item', 'id']);
     if (add.length) items.add = add;
     if (update.length) items.update = update;
@@ -1899,7 +1917,7 @@ export function removeLifeDetail(id: string): boolean {
  */
 export function editItem(
   oldName: string,
-  patch: { name?: string; qty?: number; desc?: string; carried?: boolean; location?: string },
+  patch: Partial<ItemDelta>,
 ): boolean {
   const newName = patch.name?.trim() || oldName;
   const desc = patch.desc?.trim() || undefined;
@@ -1907,6 +1925,13 @@ export function editItem(
 
   // 位置:patch 明确给了用 patch 的;否则从旧物品继承(改名不丢存放地)
   const prev = memory.items.find(i => i.id === itemId(oldName));
+  const fields = {
+    keywords: patch.keywords ?? prev?.keywords,
+    holder: patch.holder ?? prev?.holder,
+    history: patch.history ?? prev?.history,
+    important: patch.important ?? prev?.important,
+    hidden: patch.hidden ?? prev?.hidden,
+  };
   const carried = patch.carried !== undefined ? patch.carried : prev?.carried;
   const location = patch.location !== undefined ? (patch.location.trim() || undefined) : prev?.location;
 
@@ -1920,13 +1945,13 @@ export function editItem(
     return appendOpToLatestLeaf({
       items: {
         remove: [oldName],
-        add: [{ name: newName, qty, desc, carried, location }],
+        add: [{ name: newName, qty, desc, carried, location, ...fields }],
         ...(qty !== undefined ? { update: [{ name: newName, qty }] } : {}),
       },
     });
   }
   // 同名:更新数量/描述/位置(update 是「设为新值」)
-  return appendOpToLatestLeaf({ items: { update: [{ name: newName, qty, desc, carried, location }] } });
+  return appendOpToLatestLeaf({ items: { update: [{ name: newName, qty, desc, carried, location, ...fields }] } });
 }
 
 /* ============ NPC 手动 op(写回最新叶子,与 editItem 同范式) ============ */

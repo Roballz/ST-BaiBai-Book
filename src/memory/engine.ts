@@ -1163,7 +1163,7 @@ async function summarizeFloorWork(
     sceneFocus: stateBefore.state.sceneFocus,
     lifeDetails: stateBefore.lifeDetails,
     protagonist: stateBefore.protagonist,
-    items: stateBefore.items.map(i => ({ name: i.name, qty: i.qty, desc: i.desc, carried: i.carried, location: i.location })),
+    items: stateBefore.items,
     itemLog: stateBefore.itemLog,
     scenes: stateBefore.scenes.map(s => ({ path: s.path, desc: s.desc })),
     npcs: stateBefore.npcs.map(n => ({ name: n.name, gender: n.gender, age: n.age, ageTime: n.ageTime, relation: n.relation, affinityInner: n.affinityInner, affinityOuter: n.affinityOuter, affinityNote: n.affinityNote, ties: n.ties, title: n.title, personality: n.personality, important: n.important, outfit: n.outfit, condition: n.condition, follow: n.follow, location: n.location,

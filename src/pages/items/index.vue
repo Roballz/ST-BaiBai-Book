@@ -8,6 +8,11 @@ import { computed, ref } from 'vue';
 
 const newName = ref('');
 
+function toggleMode(name: string, mode: 'important' | 'hidden', value: boolean) {
+  appendOpToLatestLeaf({ items: { update: [{ name, [mode]: value,
+    ...(value ? { [mode === 'important' ? 'hidden' : 'important']: false } : {}) }] } });
+}
+
 // 物品/计划是从叶子摘要重放出来的派生数据,手动操作写入「最新一条有效叶子」。
 // 没有任何有效叶子时无处挂载,禁止手动添加。
 const hasLeaf = computed(() => derivedMeta.hasLeaf);
@@ -27,6 +32,9 @@ function removeItem(id: string) {
 
 /* —— 编辑弹窗:改名/数量/描述。数量留空=维持(update 无法清空,清空数量请删后重建) —— */
 interface ItemEditing {
+  keywords: string;
+  holder: string;
+  history: string;
   oldName: string;
   name: string;
   qty: string; // 文本承载,空=不改数量
@@ -41,6 +49,9 @@ function openEdit(id: string) {
   if (!it) return;
   editing.value = {
     oldName: it.name,
+    keywords: (it.keywords ?? []).join('、'),
+    holder: it.holder ?? '',
+    history: it.history ?? '',
     name: it.name,
     qty: typeof it.qty === 'number' ? String(it.qty) : '',
     desc: it.desc ?? '',
@@ -60,6 +71,9 @@ function saveEdit() {
   const qty = qtyStr === '' ? undefined : Number(qtyStr);
   // 随身 → 清空存放地;非随身 → 用填写的地点
   editItem(e.oldName, {
+    keywords: e.keywords.split(/[、,，;；\n]/).map(k => k.trim()).filter(Boolean),
+    holder: e.holder,
+    history: e.history,
     name: e.name,
     qty: qty !== undefined && Number.isFinite(qty) ? qty : undefined,
     desc: e.desc,
@@ -74,6 +88,7 @@ function saveEdit() {
   <section class="bbs-page">
     <h2 class="bbs-title bbs-title-sub">物品</h2>
     <SummaryOnlyNotice subject="物品清单与变动" />
+    <p class="bbs-item-desc">★ 常驻完整设定；隐藏时仅关键词命中才注入。两种模式互斥，仍受物品注入总开关控制。</p>
 
     <div class="bbs-additem">
       <input
@@ -100,6 +115,16 @@ function saveEdit() {
             </span>
           </div>
           <span class="bbs-item-acts">
+            <button class="bbs-item-act" :class="{ 'is-selected': it.important }" type="button"
+              :aria-pressed="!!it.important" :title="it.important ? '取消常驻' : '始终注入完整设定'"
+              @click="toggleMode(it.name, 'important', !it.important)">
+              <Icon name="star" />
+            </button>
+            <button class="bbs-item-act" :class="{ 'is-selected': it.hidden }" type="button"
+              :aria-pressed="!!it.hidden" :title="it.hidden ? '取消隐藏' : '隐藏，仅关键词命中时注入'"
+              @click="toggleMode(it.name, 'hidden', !it.hidden)">
+              <Icon :name="it.hidden ? 'eye-off' : 'eye'" />
+            </button>
             <button class="bbs-item-act" type="button" title="编辑" @click="openEdit(it.id)">
               <Icon name="edit" />
             </button>
@@ -109,6 +134,9 @@ function saveEdit() {
           </span>
         </div>
         <span v-if="it.desc" class="bbs-item-desc">{{ it.desc }}</span>
+        <span v-if="it.holder" class="bbs-item-desc">持有人：{{ it.holder }}</span>
+        <span v-if="it.keywords?.length" class="bbs-item-desc">关键词：{{ it.keywords.join('、') }}</span>
+        <span v-if="it.history" class="bbs-item-desc bbs-item-history">历史起源：{{ it.history }}</span>
       </div>
     </div>
 
@@ -143,6 +171,19 @@ function saveEdit() {
         <label class="bbs-modal-field">
           <span class="bbs-modal-label">描述</span>
           <textarea v-model="editing.desc" class="bbs-input bbs-modal-textarea" rows="3" placeholder="可选"></textarea>
+        </label>
+        <label class="bbs-modal-field">
+          <span class="bbs-modal-label">关键词（任一命中即展开）</span>
+          <input v-model="editing.keywords" class="bbs-input" placeholder="用逗号、顿号或分号分隔" />
+        </label>
+        <label class="bbs-modal-field">
+          <span class="bbs-modal-label">持有人</span>
+          <input v-model="editing.holder" class="bbs-input" placeholder="当前所有者、保管人或归属" />
+        </label>
+        <label class="bbs-modal-field">
+          <span class="bbs-modal-label">历史起源</span>
+          <textarea v-model="editing.history" class="bbs-input bbs-modal-textarea" rows="5"
+            placeholder="起源、来源、经手人和历史脉络；摘要会增量追加新经历"></textarea>
         </label>
         <footer class="bbs-modal-foot">
           <button class="bbs-btn" type="button" @click="cancelEdit">取消</button>
@@ -262,6 +303,9 @@ function saveEdit() {
   background: var(--bbs-surface-2);
   color: var(--bbs-ink);
 }
+.bbs-item-act.is-selected { color: var(--bbs-accent); background: var(--bbs-surface-2); }
+.bbs-item-act.is-selected :deep(svg) { fill: currentColor; fill-opacity: 0.2; }
+.bbs-item-history { white-space: pre-wrap; }
 .bbs-item-del:hover {
   color: var(--bbs-danger);
 }

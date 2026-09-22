@@ -16,6 +16,7 @@ import { getContext } from '@/st/context';
 import { buildSceneLocationIndex, classifyNpcPresence, findCurrentSceneId, getLeaf, itemReachableAtScene, leafValid } from './apply';
 import { fmtItems, fmtPlans, fmtResolvedPlans, renderVarsState, selectRecentResolvedPlans, MEMORY_BRIEFING_NOTE, MEMORY_BRIEFING_END } from './prompts';
 import { fmtLifeDetail } from './lifeDetails';
+import { itemInjectionMode } from './items';
 import { fmtNpcAffinity, fmtNpcTiesContext, NPC_AFFINITY_BRIEFING } from './npcRelations';
 import { memory } from './store';
 import { compactTimeLabel, formatRange, latestStoryTime, splitTimeLabel, timeTagPrompt } from './timeTag';
@@ -500,9 +501,12 @@ function fmtItemContext(items: MemItem[], scenes: MemScene[], here: string, loca
   const sceneIndex = buildSceneLocationIndex(scenes);
   const reachable: MemItem[] = [];
   const elsewhere: MemItem[] = [];
+  const context = recentContextText();
 
   for (const item of items) {
-    if (item.carried !== false || itemReachableAtScene(scenes, item.location, current, here, sceneIndex)) {
+    const mode = itemInjectionMode(item, context);
+    if (mode === 'hidden') continue;
+    if (mode === 'full' || item.carried !== false || itemReachableAtScene(scenes, item.location, current, here, sceneIndex)) {
       reachable.push(item);
     } else {
       elsewhere.push(item);
@@ -510,7 +514,7 @@ function fmtItemContext(items: MemItem[], scenes: MemScene[], here: string, loca
   }
 
   const blocks = [
-    `物品清单:\n${fmtItems(reachable.map(i => ({ name: i.name, qty: i.qty, desc: i.desc, carried: i.carried, location: i.location })))}`,
+    `物品清单:\n${fmtItems(reachable)}`,
   ];
   if (elsewhere.length) {
     const brief = elsewhere

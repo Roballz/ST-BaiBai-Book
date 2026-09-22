@@ -23,7 +23,16 @@ export const MEMORY_VERSION = 3;
  * 物品(派生产物,不持久化)。
  * id 是**确定性**的:`item:${规范化名}`,故重放每次得到同一 id,手动 op 可稳定引用。
  */
-export interface MemItem {
+export interface ItemFields {
+  keywords?: string[];
+  holder?: string;
+  /** Complete provenance; manual edits may replace it. */
+  history?: string;
+  important?: boolean;
+  hidden?: boolean;
+}
+
+export interface MemItem extends ItemFields {
   id: string;
   /** 物品名(同时作为匹配键) */
   name: string;
@@ -486,7 +495,9 @@ export function createEmptyMemory(): BaibaiMemory {
 /* ============ AI 返回的增量 JSON 结构 ============ */
 
 /** 物品指令里单个物品的形状 */
-export interface ItemDelta {
+export interface ItemDelta extends ItemFields {
+  /** AI updates append new provenance instead of replacing history. */
+  historyAppend?: string;
   name: string;
   desc?: string;
   qty?: number;

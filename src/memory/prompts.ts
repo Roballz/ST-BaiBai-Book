@@ -18,7 +18,7 @@ import { apiSettings, type Verbosity } from '@/api/settings';
 import { fmtLifeDetail } from './lifeDetails';
 import { fmtNpcSummaryList, NPC_AFFINITY_FIELDS, type NpcSummaryView } from './npcRelations';
 import { RULE_COMPLETE_TIME_ANCHOR } from './timeTag';
-import type { ItemLogEntry, JsonValue, MemLifeDetail, MemPlan, MemProtagonist, PlanOutcome, SceneFocus } from './types';
+import type { ItemDelta, ItemLogEntry, JsonValue, MemLifeDetail, MemPlan, MemProtagonist, PlanOutcome, SceneFocus } from './types';
 
 /** 一个可用占位符(宏):token 用于插入,desc 给用户看「这里会替换成什么」。 */
 export interface PromptMacro {
@@ -92,7 +92,14 @@ summary 用于记录本回合发生的剧情;除此之外的字段(items、plans
 拿不准时,宁可不写,也不要猜测或记录价值不高的信息。`;
 
 /** 物品规则(items 字段)。 */
+export const RULE_ITEM_FIELDS = `【物品关键词、持有人与历史起源】
+items.add/update 可填写 keywords:["关键词1","关键词2"]（整体替换，[]清空）：参照生活小档案，选正文中可能出现的物品名、别名或特征；近期正文任一关键词子串命中就展开完整设定。
+holder:"人物名或归属"：当前所有者、保管人或归属；物品转移时更新为新持有人，不要把过去经手人保留为当前持有人。未知不编造，省略保持，空字符串清空。
+新增物品用 history:"已知起源、来源、经手人和历史脉络"；已有物品只用 historyAppend:"本轮新增经历" 增量追加（多条用换行分隔），禁止用 history 覆盖旧历史、重复抄写全史或编造未知来源。
+important/hidden 是用户手动注入选择，AI 禁止填写或改变。省略字段保持原值；只因本轮明确剧情更新。`;
+
 export const RULE_ITEMS = `═══ 【物品规则】(items 字段,严格筛选) ═══
+${RULE_ITEM_FIELDS}
 默认不记。只有同时满足下列三条才记,缺一即弃:
   ✓ 角色主动获取并有意保留(买、捡、收到、偷、制作)
   ✓ 对剧情有意义(可交易/可使用/有情感价值/是线索/是武器装备)
@@ -448,8 +455,8 @@ ${RULE_LONGTERM_DB}
     "condition": "主角当前身体状态/健康(变化才写;恢复正常用空字符串)"
   },
   "items": {
-    "add": [{ "name": "物品名", "desc": "简述(可选)", "qty": 数量(可选), "carried": 是否随身true/false(可选), "location": "非随身时的存放地点(可选)" }],
-    "update": [{ "name": "已有物品名", "qty": 新数量(可选), "desc": "新描述(可选)", "carried": 是否随身(可选), "location": "存放地点(可选)" }],
+    "add": [{ "name": "物品名", "desc": "简述(可选)", "qty": 数量(可选), "carried": 是否随身true/false(可选), "location": "非随身时的存放地点(可选)", "keywords": ["原文关键词"], "holder": "当前持有人(可选)", "history": "已知历史起源(可选)" }],
+    "update": [{ "name": "已有物品名", "qty": 新数量(可选), "desc": "新描述(可选)", "carried": 是否随身(可选), "location": "存放地点(可选)", "keywords": ["新关键词(可选,整体覆盖)"], "holder": "转移后的持有人(可选)", "historyAppend": "本轮新增历史(可选,追加)" }],
     "remove": ["要移除/消耗的已有物品名"]
   },
   "scenes": {
@@ -745,7 +752,7 @@ interface BuildArgs {
   /** 主角及主要角色的生活小档案(当前已记录;供人物核对、查重与 d 序号指代) */
   lifeDetails: MemLifeDetail[];
   /** 现有物品名列表 */
-  items: { name: string; qty?: number; desc?: string; carried?: boolean; location?: string }[];
+  items: ItemDelta[];
   /** 近期物品变动日志(已结算的账,防重复结算用) */
   itemLog: ItemLogEntry[];
   /** 已知地点(完整路径 + 描述,供 AI 复用命名、防重复记录、判断 reparent) */
@@ -786,7 +793,12 @@ export function fmtItems(items: BuildArgs['items']): string {
       const desc = oneLine(i.desc) ? ` —— ${oneLine(i.desc)}` : '';
       // 随身/存放地标注:随身(默认)不标,非随身标 [存:地点],让 AI 知道现状以便正确移动物品
       const place = i.carried === false ? ` [存:${oneLine(i.location) || '某处'}]` : '';
-      return `  - ${i.name}${qty}${place}${desc}`;
+      const details = [
+        i.holder ? `持有人:${oneLine(i.holder)}` : '',
+        i.keywords?.length ? `关键词:${i.keywords.map(oneLine).join('、')}` : '',
+        i.history ? `历史起源:${oneLine(i.history)}` : '',
+      ].filter(Boolean).join('；');
+      return `  - ${i.name}${qty}${place}${desc}${details ? ` [${details}]` : ''}`;
     })
     .join('\n');
 }
@@ -1123,6 +1135,7 @@ export function buildSummaryPrompt(a: BuildArgs): { system: string; user: string
   const prompt = fill(custom, macros);
   const supplements = [PROTAGONIST_PROTOCOL_SUPPLEMENT, RULE_ABSOLUTE_TIME_LANGUAGE, SCENE_FOCUS_PROTOCOL_SUPPLEMENT];
   supplements.push(LIFE_DETAILS_PROTOCOL_SUPPLEMENT);
+  if (!prompt.includes('【物品关键词、持有人与历史起源】')) supplements.push(RULE_ITEM_FIELDS);
   if (!prompt.includes('【内心好感与外在态度规则】')) supplements.push(RULE_NPC_AFFINITY);
   // 关系线保留:自定义模板未带入时补上,保证慢热互动不在摘要/压缩里被删空(与内置模板同源)
   if (!prompt.includes('【关系线保留】')) supplements.push(RULE_RELATION_MOMENTUM);
@@ -1134,6 +1147,7 @@ export function buildSummaryPrompt(a: BuildArgs): { system: string; user: string
   return {
     system: fill(supplements.join('\n\n'), macros),
     user: `${prompt}\n\n【主角当前档案(本轮之前,只读参考)】\n${macros.protagonist_block}`
+      + (prompt.includes(macros.items_block) ? '' : `\n\n【现有物品(只读参考)】\n${macros.items_block}`)
       + (prompt.includes(macros.npcs_block) ? '' : `\n\n【已登场NPC(本轮之前,好感估计只作基线,不重复结算)】\n${macros.npcs_block}`)
       + (prompt.includes(macros.lifedetails_block.trim()) ? '' : `\n\n${macros.lifedetails_block}`),
   };
