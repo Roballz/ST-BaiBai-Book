@@ -77,7 +77,7 @@ function seedLeafIds(): Set<string> {
 }
 
 /** 扫当前 chat 收集所有有效叶子的索引素材(种子叶子除外)。 */
-function collectLeaves(chat: STMessage[]): LeafForIndex[] {
+export function collectLeaves(chat: STMessage[]): LeafForIndex[] {
   const seeds = seedLeafIds();
   const out: LeafForIndex[] = [];
   for (let i = 0; i < chat.length; i++) {

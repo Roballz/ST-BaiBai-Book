@@ -7,6 +7,7 @@
  */
 
 import { reactive } from 'vue';
+import type { HybridHit } from './hybrid';
 
 /** Embedding 检索命中(后端 max 融合后) */
 export interface RecallDebugEmbedHit {
@@ -23,8 +24,9 @@ export interface RecallDebugEmbedHit {
 /** Rerank 候选及其分档结果 */
 export interface RecallDebugRerankHit {
   leafId: string;
-  rerankScore: number;
-  similarity: number;
+  rerankScore: number | null;
+  rerankFallback?: boolean;
+  similarity: number | null;
   /** 分档:full=发全文,brief=发摘要,drop=两档都不达标被丢弃 */
   tier: 'full' | 'brief' | 'drop';
   /** 来源标记:本聊天命中为楼层号「#5」,bundle 快照为「旧档」 */
@@ -43,13 +45,16 @@ export interface RecallDebug {
   /** 查询重写产出的多条检索 query */
   queries: string[];
   embedding: RecallDebugEmbedHit[];
+  bm25: { leafId: string; score: number; preview: string }[];
+  bm25Status: string;
+  fusion: { leafId: string; score: number | null; route: string; preview: string }[];
   rerank: RecallDebugRerankHit[];
   /** 最终注入主对话的文本(空 = 本回合未注入) */
   injectedText: string;
 }
 
 function empty(): RecallDebug {
-  return { at: 0, status: '', intent: '', queries: [], embedding: [], rerank: [], injectedText: '' };
+  return { at: 0, status: '', intent: '', queries: [], embedding: [], bm25: [], bm25Status: 'BM25 未启用', fusion: [], rerank: [], injectedText: '' };
 }
 
 /** 全局召回调试快照。UI 直接订阅;recall.ts 在各阶段写入。 */
@@ -85,6 +90,15 @@ export function setRecallRerank(hits: RecallDebugRerankHit[]): void {
   recallDebug.rerank = hits;
 }
 
+export function setRecallBm25(hits: HybridHit[], status: string): void {
+  recallDebug.bm25 = hits.map(h => ({ leafId: h.leafId, score: h.bm25Score!, preview: previewOf(h.document) }));
+  recallDebug.bm25Status = status;
+}
+export function setRecallFusion(hits: HybridHit[]): void {
+  recallDebug.fusion = hits.map(h => ({ leafId: h.leafId, score: h.rrfScore ?? null,
+    route: h.similarity !== null ? (h.bm25Score !== undefined ? '向量 + BM25' : '向量') : 'BM25', preview: previewOf(h.document) }));
+}
+
 export function setRecallInjected(text: string): void {
   recallDebug.injectedText = text;
 }
@@ -96,5 +110,5 @@ export function snapshotRecallDebug(): RecallDebug {
 
 /** 把缓存的调试快照还原到面板(命中缓存时用,免得 reset 后面板空白)。 */
 export function restoreRecallDebug(snap: RecallDebug): void {
-  Object.assign(recallDebug, snap);
+  Object.assign(recallDebug, empty(), snap);
 }

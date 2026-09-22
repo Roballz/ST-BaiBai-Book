@@ -15,6 +15,7 @@
     "watch": "vite build --watch --mode development"
   },
   "devDependencies": {
+    "@types/node": "^22.20.4",
     "@vitejs/plugin-vue": "^6.0.7",
     "fake-indexeddb": "^6.2.5",
     "typescript": "^5.7.0",
@@ -23,6 +24,7 @@
     "vue-tsc": "^3.3.3"
   },
   "dependencies": {
+    "minisearch": "7.2.0",
     "vue": "^3.5.35"
   }
 }

@@ -9,8 +9,8 @@
  *    快照 = deriveMemory(chat, 洞楼index),插在「连续叶子前缀末尾」之后、洞楼之前;
  *  - 快照只含**滚出窗口的主角档案/items/plans**(时间/地点/在场已在全文里,不重复)。
  *
- * 产出多条 query,各自 embed → 后端 vec/search 多路检索 + RRF 融合;INTENT 兼作 rerank 的 query。
- * 任何失败都抛错,由召回侧 catch 后降级为「最近上下文当单 query」。
+ * 产出多条 query,各自 embed → vec/search 按最高余弦融合；可选 BM25 在召回层做 RRF。
+ * INTENT 兼作 rerank 的 query。任何失败都抛错，召回侧清空本轮注入，不降级改写。
  */
 
 import type { STMessage } from '@/st/context';

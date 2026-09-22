@@ -1355,8 +1355,8 @@ function exportPublicApiDocument() {
         <Collapsible title="召回参数" :open="false">
           <div class="bbs-vec-recall" :class="{ 'is-disabled': !apiSettings.vector.enabled }">
             <p class="bbs-field-hint">
-              先对全部向量索引算 embedding 相似度,取得分最高的若干条进入 rerank;rerank 打分后分两档:
-              得分高的发原文全文,稍低但仍过 embedding 阈值的发摘要;两档合计不超过「最终召回条数」。
+              向量与 BM25 分别召回摘要，去重并按 RRF 排名后送入 rerank。
+              先选原文，再从 BM25 自身排名跳过已选条目、顺延补摘要，最后用达标的向量摘要补位；合计不超过「注入总数」。
             </p>
 
             <p class="bbs-field-hint">
@@ -1379,7 +1379,7 @@ function exportPublicApiDocument() {
           <p class="bbs-field-hint">召回内容注入到聊天中的深度。0 = D0,最贴近最新用户输入;数字越大越靠前。</p>
 
           <label class="bbs-num-row">
-            <span class="bbs-field-label">Rerank 候选数</span>
+            <span class="bbs-field-label">向量候选数</span>
             <input
               v-model.number="apiSettings.vector.recall.rerankCandidates"
               class="bbs-input bbs-num"
@@ -1388,7 +1388,23 @@ function exportPublicApiDocument() {
               :disabled="!apiSettings.vector.enabled"
             />
           </label>
-          <p class="bbs-field-hint">按 embedding 相似度取前 N 条进入 rerank 精排(越大越准但越慢)。</p>
+          <p class="bbs-field-hint">按 embedding 相似度取前 N 条。BM25 关闭时沿用原来的候选重排路线。</p>
+
+          <label class="bbs-num-row">
+            <span class="bbs-field-label">BM25 候选数</span>
+            <input v-model.number="apiSettings.vector.recall.bm25Candidates" class="bbs-input bbs-num" type="number" min="0" max="200" step="1" :disabled="!apiSettings.vector.enabled" />
+          </label>
+          <p class="bbs-field-hint">0 = 关闭。仅检索当前聊天的有效摘要；本地分词，无额外模型请求。候选数大于摘要额度时，升原文后才能继续顺延补位。暂不含继承旧档和知识库。</p>
+          <label class="bbs-num-row">
+            <span class="bbs-field-label">融合后重排候选上限</span>
+            <input v-model.number="apiSettings.vector.recall.fusionCandidates" class="bbs-input bbs-num" type="number" min="0" max="200" step="1" :disabled="!apiSettings.vector.enabled || apiSettings.vector.recall.bm25Candidates <= 0" />
+          </label>
+          <p class="bbs-field-hint">两路去重、RRF 后最多送多少条原文给 rerank；0 = 不重排。未进入重排的 BM25 候选仍可按自身排名补摘要。</p>
+          <label class="bbs-num-row">
+            <span class="bbs-field-label">最大 BM25 摘要数</span>
+            <input v-model.number="apiSettings.vector.recall.bm25Count" class="bbs-input bbs-num" type="number" min="0" max="200" step="1" :disabled="!apiSettings.vector.enabled || apiSettings.vector.recall.bm25Candidates <= 0" />
+          </label>
+          <p class="bbs-field-hint">BM25 摘要在注入总数内的最大名额；已升原文的不占此额度，空位交给向量摘要。0 = BM25 仅参与原文候选。</p>
 
           <label class="bbs-num-row">
             <span class="bbs-field-label">Embedding 阈值</span>
@@ -1402,7 +1418,7 @@ function exportPublicApiDocument() {
               :disabled="!apiSettings.vector.enabled"
             />
           </label>
-          <p class="bbs-field-hint">摘要档准入门槛:embedding 相似度低于此的内容连摘要都不召回(0~1)。</p>
+          <p class="bbs-field-hint">向量摘要的准入门槛(0~1)，不限制独立 BM25 摘要，也不阻止候选通过 rerank 升原文。</p>
 
           <label class="bbs-num-row">
             <span class="bbs-field-label">Rerank 阈值</span>
@@ -1419,7 +1435,7 @@ function exportPublicApiDocument() {
           <p class="bbs-field-hint">rerank 得分 ≥ 此值的发原文全文,低于此但过 embedding 阈值的退为发摘要(0~1)。</p>
 
           <label class="bbs-num-row">
-            <span class="bbs-field-label">召回全文数</span>
+            <span class="bbs-field-label">最大原文数</span>
             <input
               v-model.number="apiSettings.vector.recall.fullTextCount"
               class="bbs-input bbs-num"
@@ -1431,7 +1447,7 @@ function exportPublicApiDocument() {
           <p class="bbs-field-hint">全文档最多取几条发原文(其余即便过 rerank 阈值也退为摘要)。</p>
 
           <label class="bbs-num-row">
-            <span class="bbs-field-label">最终召回条数</span>
+            <span class="bbs-field-label">注入总数</span>
             <input
               v-model.number="apiSettings.vector.recall.finalRecallCount"
               class="bbs-input bbs-num"
@@ -1440,7 +1456,8 @@ function exportPublicApiDocument() {
               :disabled="!apiSettings.vector.enabled"
             />
           </label>
-          <p class="bbs-field-hint">召回总条数上限(全文 + 摘要合计);全文不够用摘要补,补不满也无妨。</p>
+          <p class="bbs-field-hint">原文 + BM25 摘要 + 向量摘要的合计上限；不足不强行填满。原文优先，BM25 其次，向量补余量。知识库继续使用独立额度。</p>
+          <p class="bbs-field-hint">重排失败沿用原生向量回退：余弦分仍可能满足原文阈值；BM25 独有命中只补摘要，不用 BM25/RRF 分数升原文。</p>
 
           <label class="bbs-num-row">
             <span class="bbs-field-label">起召 AI 楼数</span>
@@ -1548,23 +1565,35 @@ function exportPublicApiDocument() {
               <p v-else class="bbs-dbg-empty">无</p>
             </Collapsible>
 
-            <Collapsible :title="`3 · Rerank 分档 · ${recallDebug.rerank.length} 条`" :open="false">
+            <Collapsible :title="`3 · BM25 候选 · ${recallDebug.bm25.length} 条`" :open="false">
+              <p class="bbs-field-hint">{{ recallDebug.bm25Status }}</p>
+              <ul class="bbs-dbg-cards"><li v-for="h in recallDebug.bm25" :key="h.leafId" class="bbs-dbg-card">
+                <span class="bbs-dbg-num">{{ h.score.toFixed(3) }}</span><p class="bbs-dbg-prev">{{ h.preview }}</p>
+              </li></ul>
+            </Collapsible>
+            <Collapsible :title="`4 · 送入重排 · ${recallDebug.fusion.length} 条`" :open="false">
+              <ul class="bbs-dbg-cards"><li v-for="(h, i) in recallDebug.fusion" :key="i" class="bbs-dbg-card">
+                <span>{{ h.route }}</span><span class="bbs-dbg-num">{{ h.score === null ? '原生向量排序' : `RRF ${h.score.toFixed(5)}` }}</span>
+                <p class="bbs-dbg-prev">{{ h.preview }}</p>
+              </li></ul>
+            </Collapsible>
+            <Collapsible :title="`5 · 重排与补位分档 · ${recallDebug.rerank.length} 条`" :open="false">
               <ul v-if="recallDebug.rerank.length" class="bbs-dbg-cards">
                 <li v-for="(h, i) in recallDebug.rerank" :key="i" class="bbs-dbg-card" :class="{ 'is-dropped': h.tier === 'drop' }">
                   <div class="bbs-dbg-card-top">
                     <span class="bbs-dbg-tier" :class="`is-${h.tier}`">{{ TIER_LABEL[h.tier] }}</span>
                     <span class="bbs-dbg-from" :class="{ 'is-bundle': h.source === '旧档' }">{{ h.source }}</span>
                     <span v-if="h.storyTime" class="bbs-dbg-when">【{{ h.storyTime }}】</span>
-                    <span class="bbs-dbg-num">{{ h.rerankScore.toFixed(3) }}</span>
+                    <span class="bbs-dbg-num">{{ h.rerankScore === null ? '未重排补位' : `${h.rerankFallback ? '向量回退 ' : ''}${h.rerankScore.toFixed(3)}` }}</span>
                   </div>
-                  <div class="bbs-dbg-bar" :class="`tier-${h.tier}`"><i :style="{ width: scorePct(h.rerankScore) + '%' }"></i></div>
+                  <div v-if="h.rerankScore !== null" class="bbs-dbg-bar" :class="`tier-${h.tier}`"><i :style="{ width: scorePct(h.rerankScore) + '%' }"></i></div>
                   <p class="bbs-dbg-prev">{{ h.preview }}</p>
                 </li>
               </ul>
               <p v-else class="bbs-dbg-empty">无(rerank 未执行或无候选)</p>
             </Collapsible>
 
-            <Collapsible title="4 · 最终注入" :open="false">
+            <Collapsible title="6 · 最终注入" :open="false">
               <pre v-if="recallDebug.injectedText" class="bbs-dbg-pre">{{ recallDebug.injectedText }}</pre>
               <p v-else class="bbs-dbg-empty">本回合未注入。</p>
             </Collapsible>
